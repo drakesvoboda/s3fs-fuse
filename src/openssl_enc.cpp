@@ -26,98 +26,160 @@
 #include "openssl_enc.h"
 #include "curl.h"
 
-//Set Statics
+// Set Statics
 const char * CryptUtil::pass = "key";
 const EVP_CIPHER * CryptUtil::cipher = EVP_rc4();
 const EVP_MD * CryptUtil::digest = EVP_md5();
 
-size_t CryptUtil::DownloadEcryptedWriteCallback(void * ptr, size_t size, size_t nmemb, void * userp)
+ssize_t CryptUtil::DownloadEcryptedWriteCallback(void * ptr, size_t size, size_t nmemb, void * userp)
 {
   CryptContext * ctx = reinterpret_cast<CryptContext*>(userp);
 
   size_t requested_size = size * nmemb;
-  S3FS_PRN_INFO("[requested: %ld][remaining: %ld]", requested_size, ctx->bytes_remaining);
 
-  size_t copysize = (requested_size < ctx->bytes_remaining) ? requested_size : ctx->bytes_remaining;
-  size_t ret;
+  S3FS_PRN_INFO("[sent: %ld][remaining: %ld]", requested_size, ctx->bytes_remaining);
 
-  if(requested_size < 1 || ctx->fd == -1 || ctx->bytes_remaining < 1)
-	ret =  0;
-  else	
-	ret = CryptUtil::do_crypt(ctx, copysize, (unsigned char*)ptr);
+  ssize_t cryptlen, writelen, totalwrite = 0;
+  size_t copysize = ((ssize_t)requested_size < ctx->bytes_remaining) ? requested_size : ctx->bytes_remaining;
 
-  S3FS_PRN_INFO("[requested: %ld][given: %ld]", requested_size, ret);
+  unsigned char * outbuff = new unsigned char[copysize + EVP_MAX_BLOCK_LENGTH];
+
+  if(ctx->fd == -1){
+	S3FS_PRN_ERR("Missing file descriptor for write.");
+	return -1;
+  }
+
+  if(copysize > 0){	
+	cryptlen = CryptUtil::do_crypt(ctx, ptr, copysize, (void *)outbuff);
+
+    if (cryptlen == -1){
+	  S3FS_PRN_ERR("Error during crypt(%d)", errno); 
+	  return -1;
+    }
+
+    writelen = pwrite(ctx->fd, (const void *)outbuff, cryptlen, ctx->bytes_finished + totalwrite);
+
+    if(writelen == -1){
+	  S3FS_PRN_ERR("Error writing to file(%d)", errno); 
+	  return -1;
+    }
+
+	totalwrite += writelen;
+  }
+
+  ctx->bytes_remaining -= copysize;
+
+  if(ctx->bytes_remaining < 1 && !ctx->finished){
+    cryptlen = do_crypt(ctx, (unsigned char*)ptr, 0, outbuff);
+
+    if (cryptlen == -1){
+	  S3FS_PRN_ERR("Error during crypt(%d)", errno); 
+	  return -1;
+    }
+
+    writelen = pwrite(ctx->fd, (const void *)outbuff, cryptlen, ctx->bytes_finished + totalwrite);
+
+    if(writelen == -1){
+	  S3FS_PRN_ERR("Error writing to file(%d)", errno); 
+	  return -1;
+    }
+
+    totalwrite += writelen;
+  }
+
+  ctx->bytes_finished += totalwrite;
+
+  S3FS_PRN_INFO("[sent: %ld][written: %ld][remaining: %ld]", requested_size, totalwrite, ctx->bytes_remaining);
   S3FS_PRN_INFO("[text: %s]", (char *)ptr);
 
-  return ret;
+  return totalwrite;
 }
 
-ssize_t CryptUtil::CryptFile(int in_fd, size_t in_file_size, int out_fd, bool do_encrypt)
+ssize_t CryptUtil::CryptFile(int in_fd, int out_fd, bool do_encrypt)
 {
-  S3FS_PRN_INFO("[in_fd: %d][in_file_size: %ld][out_fd: %d]", in_fd, in_file_size, out_fd);
+  S3FS_PRN_INFO("[in_fd: %d][out_fd: %d][mode: %s]", in_fd, out_fd, do_encrypt ? "encrypt" : "decrypt");
 
-  CryptContext * ctx = new CryptContext(in_fd, in_file_size, do_encrypt);
+  CryptContext * ctx = new CryptContext(in_fd, -1, do_encrypt);
 
-  size_t cryptlen;
-  ssize_t writelen, totalwrite = 0;
+  ssize_t cryptlen;
+  ssize_t readlen, totalread = 0, writelen, totalwrite = 0;
 
-  unsigned char buffer[16 * 1024];
+  size_t buffsize = 16 * 1024;
 
-  for(;ctx->bytes_remaining > 0 && !ctx->finished; totalwrite += writelen){
-	cryptlen = do_crypt(ctx, 16 * 1024, buffer);
+  unsigned char inbuff[buffsize];
+  unsigned char outbuff[buffsize + EVP_MAX_BLOCK_LENGTH];
+
+  for(;;totalread += readlen, totalwrite += writelen){
+	readlen = pread(in_fd, (void *)inbuff, buffsize, totalread);
+    S3FS_PRN_INFO("[read: %ld][text: %s]", readlen, inbuff)
+
+	if(readlen == 0) break;
+	else if(readlen == -1){
+	  S3FS_PRN_ERR("Error reading from file(%d)", errno); 
+	  return -1;
+	}
+	
+	cryptlen = do_crypt(ctx, (const void *)inbuff, readlen, (void *)outbuff);
+
 	if (cryptlen == 0) break;
-	writelen = pwrite(out_fd, (const void *)buffer, cryptlen, totalwrite);
+	else if (cryptlen == -1){
+	  S3FS_PRN_ERR("Error during crypt(%d)", errno); 
+	  return -1;
+	}
+
+	writelen = pwrite(out_fd, (const void *)outbuff, cryptlen, totalwrite);
+	
 	if(writelen == -1){
 	  S3FS_PRN_ERR("Error writing to file(%d)", errno); 
 	  return -1;
 	}
   }
 
+  if(!ctx->finished){
+    cryptlen = do_crypt(ctx, inbuff, 0, outbuff); // Finish crypt
+
+    if (cryptlen == -1){
+      S3FS_PRN_ERR("Error during crypt(%d)", errno); 
+	  return -1;
+    }
+  
+    writelen = pwrite(out_fd, (const void *)outbuff, cryptlen, totalwrite);
+	
+    if(writelen == -1){
+	  S3FS_PRN_ERR("Error writing to file(%d)", errno); 
+	  return -1;
+    }
+
+    totalwrite += writelen;
+  }
+
   delete ctx;
+
+  S3FS_PRN_INFO("[returning: %ld]", totalwrite);
 
   return totalwrite;
 }
 
-size_t CryptUtil::do_crypt(CryptContext * ctx, size_t requested_size, unsigned char * ptr)
+ssize_t CryptUtil::do_crypt(CryptContext * ctx, const void * inbuff, size_t buffsize, void * outbuff)
 {
-  unsigned char * inbuff = new unsigned char[requested_size]; //Buffer to store between read and crypt
-  int readlen = 0, writelen = 0;
-  size_t totalwrite = 0, totalread = 0;
+  int writelen = 0;
 
-  for(;totalwrite < requested_size; totalwrite += writelen, totalread += readlen, ctx->bytes_finished += readlen){
-    //This loop should only run once. The first chunk read and encrypted should be requested_size bytes long
-	readlen = pread(ctx->fd, inbuff, requested_size - totalread, ctx->bytes_finished);
-
-    if(readlen == -1){
-      S3FS_PRN_ERR("Error reading from file(%d)", errno); 
-      return 0;
-	}
-	else if(readlen == 0) 
-      break; //We've finished reading from the file (only cipher padding should be left)
-	
-	if(EVP_CipherUpdate(&(ctx->ctx), &(ptr)[totalwrite], &writelen, inbuff, readlen) == 0){
+  if(buffsize > 0){
+	if(EVP_CipherUpdate(&(ctx->ctx), (unsigned char *)outbuff, &writelen, (unsigned char *)inbuff, buffsize) == 0){
       S3FS_PRN_ERR("Error while encrypting/decrypting(%d)", errno);
-      return 0;
+      return -1;
 	}
-  }
-
-  ctx->bytes_remaining -= totalread;
-
-  if(ctx->bytes_remaining < 1 && !ctx->finished){	//We have finished reading from the file. Only cipher padding remains.
-	//This should add 0 bytes since RC4 is a stream cipher
-	if(EVP_CipherFinal_ex(&(ctx->ctx), &(ptr)[totalwrite], &writelen) == 0){
+  }else if(buffsize == 0){	
+	if(EVP_CipherFinal_ex(&(ctx->ctx), (unsigned char *)outbuff, &writelen) == 0){
       S3FS_PRN_ERR("Error while encrypting/decrypting(%d)", errno);
-      return 0;
+      return -1;
 	}
 
     ctx->finished = true;
-
-	totalwrite += writelen;
   }
 
-  delete inbuff;
-
-  return totalwrite;
+  S3FS_PRN_INFO("[requested: %ld][returning: %d]", buffsize, writelen);
+  return writelen;
 }
 
 CryptContext::CryptContext(int fd, size_t size, bool do_encrypt): 

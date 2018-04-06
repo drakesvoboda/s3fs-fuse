@@ -12,14 +12,15 @@ public:
   int fd;	// When uploading, read from this fd
 			// When downloading, write to this fd
 
-  size_t bytes_remaining;	// Keeps track of the number of bytes remaining to be read from fd
+  ssize_t bytes_remaining;	// Keeps track of the number of bytes remaining to be read from fd
 							// Or the number of bytes still to be downloaded
+							// Can be -1 if the size is not known
 
   size_t bytes_finished;	// Used as offset for fd
 							// Keeps track of the number of bytes read from fd
 							// Or the number of bytes written to fd
 
-  size_t paddedsize;		// Largest possible output size after encryption
+  size_t paddedsize;	// Largest possible output size after encryption
 
   bool do_encrypt;		// Area we encrypting or decrypting?
   bool initialized;		// Have we initialized ctx?
@@ -37,23 +38,23 @@ public:
 class CryptUtil {
 friend class CryptContext;
 private:
-    const static size_t SALTSIZE = 8;
-    const static size_t BUFFSIZE = (8 * 1024);
-    const static bool IS_SALTED = false;
-    const static char * pass;
-    const static EVP_CIPHER * cipher;
-    const static EVP_MD * digest;
+  const static size_t SALTSIZE = 8;
+  const static size_t BUFFSIZE = (8 * 1024);
+  const static bool IS_SALTED = false;
+  const static char * pass;
+  const static EVP_CIPHER * cipher;
+  const static EVP_MD * digest;
 
 public:
-    /// Encrypts requested_size bytes from the file descriptor in ctx into buffer pointed to by ptr.
-    /// Ensure that at least requested_size bytes have been allocated at ptr.
-    /// Returns number of bytes written to ptr, updates ctx.
-    /// return value must equal requested_size.
-    static size_t do_crypt(CryptContext * ctx, size_t requested_size, unsigned char * ptr);
+  /// Encrypts requested_size bytes from the file descriptor in ctx into buffer pointed to by ptr.
+  /// Ensure that at least requested_size bytes have been allocated at ptr.
+  /// Returns number of bytes written to ptr, updates ctx.
+  /// return value must equal requested_size.
+  static ssize_t do_crypt(CryptContext * ctx, const void * inbuff, size_t buffsize, void * outbuff);
 
-    /// userp is a pointer to a CrpytContext object.
-    static size_t DownloadEcryptedWriteCallback(void * ptr, size_t size, size_t nmemb, void * userp);
-    static ssize_t CryptFile(int in_fd, size_t in_file_size, int out_fd, bool do_encrypt);
+  /// userp is a pointer to a CrpytContext object.
+  static ssize_t DownloadEcryptedWriteCallback(void * ptr, size_t size, size_t nmemb, void * userp);
+  static ssize_t CryptFile(int in_fd, int out_fd, bool do_encrypt);
 };
 #endif
 

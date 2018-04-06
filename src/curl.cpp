@@ -1669,7 +1669,7 @@ int S3fsCurl::CurlDebugFunc(CURL* hcurl, curl_infotype type, char* data, size_t 
 //-------------------------------------------------------------------
 S3fsCurl::S3fsCurl(bool ahbe) : 
     hCurl(NULL), type(REQTYPE_UNSET), path(""), base_path(""), saved_path(""), url(""), requestHeaders(NULL),
-    bodydata(NULL), headdata(NULL), LastResponseCode(-1), postdata(NULL), postdata_remaining(0), is_use_ahbe(ahbe),
+    bodydata(NULL), headdata(NULL), LastResponseCode(-1), postdata(NULL), postdata_remaining(0), ctx(NULL), is_use_ahbe(ahbe),
     retry_count(0), b_infile(NULL), b_postdata(NULL), b_postdata_remaining(0), b_partdata_startpos(0), b_partdata_size(0),
     b_ssekey_pos(-1), b_ssevalue(""), b_ssetype(SSE_DISABLE), op(""), query_string("")
 {
@@ -1678,6 +1678,8 @@ S3fsCurl::S3fsCurl(bool ahbe) :
 S3fsCurl::~S3fsCurl()
 {
   DestroyCurlHandle();
+  DestroyEncCtx();
+  
 }
 
 bool S3fsCurl::ResetHandle(void)
@@ -1758,6 +1760,17 @@ bool S3fsCurl::CreateCurlHandle(bool force)
 
   pthread_mutex_unlock(&S3fsCurl::curl_handles_lock);
 
+  return true;
+}
+
+bool S3fsCurl::DestroyEncCtx(void)
+{
+  if(!ctx)
+    return false;
+
+  delete ctx;
+  ctx = NULL;
+  
   return true;
 }
 
@@ -2907,7 +2920,7 @@ int S3fsCurl::PutRequest(const char* tpath, headers_t& meta, int fd)
 	
 	partdata.fd         = tmpfd;
     partdata.startpos   = 0;
-	partdata.size       = CryptUtil::CryptFile(fd2, st.st_size, tmpfd, true);
+	partdata.size       = CryptUtil::CryptFile(fd2, tmpfd, true);
 	b_partdata_startpos = partdata.startpos;
 	b_partdata_size     = partdata.size;
 
@@ -3041,6 +3054,8 @@ int S3fsCurl::PreGetObjectRequest(const char* tpath, int fd, off_t start, ssize_
     S3FS_PRN_WARN("Failed to set SSE header, but continue...");
   }
 
+  ctx = new CryptContext(fd, size, false);
+
   op = "GET";
   type = REQTYPE_GET;
   insertAuthHeaders();
@@ -3048,8 +3063,8 @@ int S3fsCurl::PreGetObjectRequest(const char* tpath, int fd, off_t start, ssize_
   // setopt
   curl_easy_setopt(hCurl, CURLOPT_URL, url.c_str());
   curl_easy_setopt(hCurl, CURLOPT_HTTPHEADER, requestHeaders);
-  curl_easy_setopt(hCurl, CURLOPT_WRITEFUNCTION, S3fsCurl::DownloadWriteCallback);
-  curl_easy_setopt(hCurl, CURLOPT_WRITEDATA, (void*)this);
+  curl_easy_setopt(hCurl, CURLOPT_WRITEFUNCTION, CryptUtil::DownloadEcryptedWriteCallback);
+  curl_easy_setopt(hCurl, CURLOPT_WRITEDATA, (void*)ctx);
   S3fsCurl::AddUserAgent(hCurl);        // put User-Agent
 
   // set info for callback func.
@@ -3090,6 +3105,7 @@ int S3fsCurl::GetObjectRequest(const char* tpath, int fd, off_t start, ssize_t s
 
   result = RequestPerform();
   partdata.clear();
+  DestroyEncCtx();
 
   return result;
 }
