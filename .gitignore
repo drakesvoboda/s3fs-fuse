@@ -30,3 +30,5 @@
 /test/s3proxy-*
 /test/*.log
 /default_commit_hash
+tags
+cscope*

@@ -50,6 +50,7 @@
 #include "s3fs_util.h"
 #include "s3fs_auth.h"
 #include "addhead.h"
+#include "openssl_enc.h"
 
 using namespace std;
 
@@ -645,7 +646,7 @@ string S3fsCurl::LookupMimeType(const string& name)
   string::size_type first_pos = name.find_first_of('.');
   string prefix, ext, ext2;
 
-  // No dots in name, just return
+  // No dots in n/S3/ame, just return
   if(last_pos == string::npos){
     return result;
   }
@@ -823,6 +824,8 @@ size_t S3fsCurl::UploadReadCallback(void* ptr, size_t size, size_t nmemb, void* 
 {
   S3fsCurl* pCurl = reinterpret_cast<S3fsCurl*>(userp);
 
+  S3FS_PRN_INFO("");
+
   if(1 > (size * nmemb)){
     return 0;
   }
@@ -848,12 +851,17 @@ size_t S3fsCurl::UploadReadCallback(void* ptr, size_t size, size_t nmemb, void* 
   pCurl->partdata.startpos += totalread;
   pCurl->partdata.size     -= totalread;
 
+  S3FS_PRN_INFO("[requested: %ld][given: %ld]", size * nmemb, totalread)
+  S3FS_PRN_INFO("[text: %s]", (char*)ptr);
+
   return totalread;
 }
 
 size_t S3fsCurl::DownloadWriteCallback(void* ptr, size_t size, size_t nmemb, void* userp)
 {
   S3fsCurl* pCurl = reinterpret_cast<S3fsCurl*>(userp);
+
+  S3FS_PRN_INFO("");
 
   if(1 > (size * nmemb)){
     return 0;
@@ -1909,9 +1917,10 @@ bool S3fsCurl::RemakeHandle(void)
       curl_easy_setopt(hCurl, CURLOPT_WRITEDATA, (void*)bodydata);
       curl_easy_setopt(hCurl, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
       curl_easy_setopt(hCurl, CURLOPT_HTTPHEADER, requestHeaders);
-      if(b_infile){
-        curl_easy_setopt(hCurl, CURLOPT_INFILESIZE_LARGE, static_cast<curl_off_t>(st.st_size));
-        curl_easy_setopt(hCurl, CURLOPT_INFILE, b_infile);
+      if(b_infile && partdata.fd != -1){
+        curl_easy_setopt(hCurl, CURLOPT_INFILESIZE_LARGE, partdata.size); // Content-Length
+		curl_easy_setopt(hCurl, CURLOPT_READFUNCTION, S3fsCurl::UploadReadCallback);
+		curl_easy_setopt(hCurl, CURLOPT_READDATA, (void*)this);
       }else{
         curl_easy_setopt(hCurl, CURLOPT_INFILESIZE, 0);
       }
@@ -2868,6 +2877,7 @@ int S3fsCurl::PutRequest(const char* tpath, headers_t& meta, int fd)
   struct stat st;
   FILE*       file = NULL;
   int         fd2;
+  CryptContext * ctx = NULL;
 
   S3FS_PRN_INFO3("[tpath=%s]", SAFESTRPTR(tpath));
 
@@ -2884,6 +2894,13 @@ int S3fsCurl::PutRequest(const char* tpath, headers_t& meta, int fd)
       return -errno;
     }
     b_infile = file;
+	partdata.fd         = fd2;
+    partdata.startpos   = 0;
+	partdata.size       = st.st_size;
+	b_partdata_startpos = partdata.startpos;
+	b_partdata_size     = partdata.size;
+	ctx = new CryptContext(fd2, st.st_size, true);
+
   }else{
     // This case is creating zero byte object.(calling by create_file_object())
     S3FS_PRN_INFO3("create zero byte file object.");
@@ -2958,9 +2975,14 @@ int S3fsCurl::PutRequest(const char* tpath, headers_t& meta, int fd)
   curl_easy_setopt(hCurl, CURLOPT_WRITEDATA, (void*)bodydata);
   curl_easy_setopt(hCurl, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
   curl_easy_setopt(hCurl, CURLOPT_HTTPHEADER, requestHeaders);
-  if(file){
-    curl_easy_setopt(hCurl, CURLOPT_INFILESIZE_LARGE, static_cast<curl_off_t>(st.st_size)); // Content-Length
-    curl_easy_setopt(hCurl, CURLOPT_INFILE, file);
+  if(file && ctx){
+    curl_easy_setopt(hCurl, CURLOPT_INFILESIZE_LARGE, ctx->paddedsize); // Content-Length
+    curl_easy_setopt(hCurl, CURLOPT_READFUNCTION, CryptUtil::UploadEncryptedReadCallback);
+    curl_easy_setopt(hCurl, CURLOPT_READDATA, (void*)ctx);
+	/*
+    curl_easy_setopt(hCurl, CURLOPT_INFILESIZE_LARGE, partdata.size); // Content-Length
+    curl_easy_setopt(hCurl, CURLOPT_READFUNCTION, S3fsCurl::UploadReadCallback);
+    curl_easy_setopt(hCurl, CURLOPT_READDATA, (void*)this);*/
   }else{
     curl_easy_setopt(hCurl, CURLOPT_INFILESIZE, 0);             // Content-Length: 0
   }
@@ -2971,7 +2993,8 @@ int S3fsCurl::PutRequest(const char* tpath, headers_t& meta, int fd)
   int result = RequestPerform();
   delete bodydata;
   bodydata = NULL;
-  if(file){
+  if(file && ctx){
+	delete ctx;
     fclose(file);
   }
 
