@@ -5,24 +5,32 @@
 
 class CryptContext {
 public:
-    EVP_CIPHER_CTX ctx;
-    bool initialized;
-	bool finished;
-    const unsigned char * salt;
-    int fd;
-    size_t bytes_remaining; // Keeps track of the number of bytes remaining to be read from fd
-    bool do_encrypt;
-    size_t total_bytes_written; // Keeps track of the number of bytes that have been encrypted by the context
+  EVP_CIPHER_CTX ctx;
 
-    size_t total_bytes_read; // Keeps track of the number of bytes read from fd
-    size_t paddedsize; // Largest possible output size after encryption
-    
-    CryptContext(int fd, size_t size, bool do_encrypt);  
+  const unsigned char * salt;
 
-    ~CryptContext() 
-    {
-        EVP_CIPHER_CTX_cleanup(&ctx);
-    }
+  int fd;	// When uploading, read from this fd
+			// When downloading, write to this fd
+
+  size_t bytes_remaining;	// Keeps track of the number of bytes remaining to be read from fd
+							// Or the number of bytes still to be downloaded
+
+  size_t bytes_finished;	// Used as offset for fd
+							// Keeps track of the number of bytes read from fd
+							// Or the number of bytes written to fd
+
+  size_t paddedsize;		// Largest possible output size after encryption
+
+  bool do_encrypt;		// Area we encrypting or decrypting?
+  bool initialized;		// Have we initialized ctx?
+  bool finished;		// Have we finished?
+
+  CryptContext(int fd, size_t size, bool do_encrypt);  
+
+  ~CryptContext() 
+  {
+    EVP_CIPHER_CTX_cleanup(&ctx);
+  }
 };
 
 
