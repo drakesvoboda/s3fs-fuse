@@ -7,6 +7,7 @@ class CryptContext {
 public:
     EVP_CIPHER_CTX ctx;
     bool initialized;
+	bool finished;
     const unsigned char * salt;
     int fd;
     size_t bytes_remaining; // Keeps track of the number of bytes remaining to be read from fd
@@ -40,10 +41,11 @@ public:
     /// Ensure that at least requested_size bytes have been allocated at ptr.
     /// Returns number of bytes written to ptr, updates ctx.
     /// return value must equal requested_size.
-    static size_t do_crypt(CryptContext * ctx, size_t requested_size, unsigned char * ptr, bool do_encrypt);
+    static size_t do_crypt(CryptContext * ctx, size_t requested_size, unsigned char * ptr);
 
     /// userp is a pointer to a CrpytContext object.
-    static size_t UploadEncryptedReadCallback(void * ptr, size_t size, size_t nmemb, void * userp);
+    static size_t DownloadEcryptedWriteCallback(void * ptr, size_t size, size_t nmemb, void * userp);
+    static ssize_t CryptFile(int in_fd, size_t in_file_size, int out_fd, bool do_encrypt);
 };
 #endif
 

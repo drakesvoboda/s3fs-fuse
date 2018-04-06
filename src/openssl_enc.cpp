@@ -30,7 +30,7 @@ const char * CryptUtil::pass = "key";
 const EVP_CIPHER * CryptUtil::cipher = EVP_rc4();
 const EVP_MD * CryptUtil::digest = EVP_md5();
 
-size_t CryptUtil::UploadEncryptedReadCallback(void * ptr, size_t size, size_t nmemb, void * userp)
+size_t CryptUtil::DownloadEcryptedWriteCallback(void * ptr, size_t size, size_t nmemb, void * userp)
 {
     CryptContext * ctx = reinterpret_cast<CryptContext*>(userp);
 
@@ -43,7 +43,7 @@ size_t CryptUtil::UploadEncryptedReadCallback(void * ptr, size_t size, size_t nm
     if(requested_size < 1 || ctx->fd == -1 || ctx->bytes_remaining < 1)
         ret =  0;
 	else	
-		ret = CryptUtil::do_crypt(ctx, copysize, (unsigned char*)ptr, true);
+		ret = CryptUtil::do_crypt(ctx, copysize, (unsigned char*)ptr);
 
 	S3FS_PRN_INFO("[requested: %ld][given: %ld]", requested_size, ret);
     S3FS_PRN_INFO("[text: %s]", (char *)ptr);
@@ -51,21 +51,40 @@ size_t CryptUtil::UploadEncryptedReadCallback(void * ptr, size_t size, size_t nm
 	return ret;
 }
 
-size_t CryptUtil::CryptFile(int in_fd, size_t in_file_size, int out_fd)
+ssize_t CryptUtil::CryptFile(int in_fd, size_t in_file_size, int out_fd, bool do_encrypt)
 {
-	CryptContext ctx(in_fd,in_file_size,1);
-	size_t cryptlen, totalcrypt = 0;
 
-	for(;;)
+	S3FS_PRN_INFO("[in_fd: %d][in_file_size: %ld][out_fd: %d]", in_fd, in_file_size, out_fd);
+
+	CryptContext * ctx = new CryptContext(in_fd, in_file_size, do_encrypt);
+
+	size_t cryptlen;
+	ssize_t writelen, totalwrite = 0;
+
+	unsigned char buffer[16 * 1024];
+
+	S3FS_PRN_INFO("[bytes_remaining: %ld][finished: %s]", ctx->bytes_remaining, ctx->finished ? "true" : "false");
+	for(;ctx->bytes_remaining > 0 && !ctx->finished; totalwrite += writelen)
 	{
-		cryptlen = do_Crypt()
-
+		cryptlen = do_crypt(ctx, 16 * 1024, buffer);
+		S3FS_PRN_INFO("[cryptlen: %ld]", cryptlen);
+		if (cryptlen == 0) break;
+		writelen = pwrite(out_fd, (const void *)buffer, cryptlen, totalwrite);
+		if(writelen == -1)
+		{
+			S3FS_PRN_ERR("Error writing to file(%d)", errno); 
+			return -1;
+		}
 	}
 
+	delete ctx;
 
+	S3FS_PRN_INFO("[totalwrite: %ld]", totalwrite);
+
+	return totalwrite;
 }
 
-size_t CryptUtil::do_crypt(CryptContext * ctx, size_t requested_size, unsigned char * ptr, bool do_encrypt)
+size_t CryptUtil::do_crypt(CryptContext * ctx, size_t requested_size, unsigned char * ptr)
 {
     unsigned char * inbuff = new unsigned char[requested_size]; //Buffer to store characters between reading and encryption
     int readlen = 0, writelen = 0;
@@ -93,13 +112,16 @@ size_t CryptUtil::do_crypt(CryptContext * ctx, size_t requested_size, unsigned c
 
     ctx->bytes_remaining -= totalread;
 
-    if(ctx->bytes_remaining < 1)
-    { //We have finished reading from the file. Only cipher padding remains. This should add 0 bytes since RC4 is a stream cipher
+    if(ctx->bytes_remaining < 1 && !ctx->finished)
+    {	//We have finished reading from the file. Only cipher padding remains.
+		//This should add 0 bytes since RC4 is a stream cipher
         if(EVP_CipherFinal_ex(&(ctx->ctx), &(ptr)[totalwrite], &writelen) == 0)
 		{
             S3FS_PRN_ERR("Error while encrypting/decrypting(%d)", errno);
 			return 0;
 		}
+
+		ctx->finished = true;
 
         totalwrite += writelen;
     }
@@ -111,7 +133,8 @@ size_t CryptUtil::do_crypt(CryptContext * ctx, size_t requested_size, unsigned c
     return totalwrite;
 }
 
-CryptContext::CryptContext(int fd, size_t size, bool do_encrypt) : fd(fd), bytes_remaining(size), do_encrypt(do_encrypt), total_bytes_written(0), total_bytes_read(0), paddedsize(size)
+CryptContext::CryptContext(int fd, size_t size, bool do_encrypt)
+: fd(fd), bytes_remaining(size), do_encrypt(do_encrypt), total_bytes_written(0), total_bytes_read(0), paddedsize(size)
 {
 	unsigned char key[16], iv[EVP_MAX_IV_LENGTH];
 	int saltlen = 0;
@@ -123,8 +146,8 @@ CryptContext::CryptContext(int fd, size_t size, bool do_encrypt) : fd(fd), bytes
 	EVP_CIPHER_CTX_init(&ctx);
 	EVP_CipherInit_ex(&ctx, CryptUtil::cipher, NULL, key, iv, do_encrypt);
 	initialized = true;
+	finished = bytes_remaining < 1;
 }
-
 
 /*
 * Local variables:

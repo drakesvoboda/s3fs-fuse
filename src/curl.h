@@ -52,6 +52,8 @@ class BodyData
       Clear();
     }
 
+	char * print(){ return text; }
+
     void Clear(void);
     bool Append(void* ptr, size_t bytes);
     bool Append(void* ptr, size_t blockSize, size_t numBlocks) {

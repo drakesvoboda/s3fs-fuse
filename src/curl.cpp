@@ -861,8 +861,6 @@ size_t S3fsCurl::DownloadWriteCallback(void* ptr, size_t size, size_t nmemb, voi
 {
   S3fsCurl* pCurl = reinterpret_cast<S3fsCurl*>(userp);
 
-  S3FS_PRN_INFO("");
-
   if(1 > (size * nmemb)){
     return 0;
   }
@@ -2380,7 +2378,7 @@ void S3fsCurl::insertV4Headers()
   string payload_hash;
   switch (type) {
     case REQTYPE_PUT:
-      payload_hash = s3fs_sha256sum(b_infile == NULL ? -1 : fileno(b_infile), 0, -1);
+      payload_hash = s3fs_sha256sum((b_infile != NULL) ? fileno(b_infile) : -1, 0, -1);
       break;
 
     case REQTYPE_COMPLETEMULTIPOST:
@@ -2875,9 +2873,8 @@ int S3fsCurl::PutHeadRequest(const char* tpath, headers_t& meta, bool is_copy)
 int S3fsCurl::PutRequest(const char* tpath, headers_t& meta, int fd)
 {
   struct stat st;
-  FILE*       file = NULL;
-  int         fd2;
-  CryptContext * ctx = NULL;
+  int fd2;
+  int tmpfd = -1;
 
   S3FS_PRN_INFO3("[tpath=%s]", SAFESTRPTR(tpath));
 
@@ -2886,20 +2883,33 @@ int S3fsCurl::PutRequest(const char* tpath, headers_t& meta, int fd)
   }
   if(-1 != fd){
     // duplicate fd
-    if(-1 == (fd2 = dup(fd)) || -1 == fstat(fd2, &st) || 0 != lseek(fd2, 0, SEEK_SET) || NULL == (file = fdopen(fd2, "rb"))){
+    if(-1 == (fd2 = dup(fd)) || -1 == fstat(fd2, &st) || 0 != lseek(fd2, 0, SEEK_SET)){
       S3FS_PRN_ERR("Could not duplicate file descriptor(errno=%d)", errno);
       if(-1 != fd2){
         close(fd2);
       }
       return -errno;
     }
-    b_infile = file;
-	partdata.fd         = fd2;
+
+	char filename[] = "s3fsXXXXXX";
+
+	if((tmpfd = mkstemp(filename)) == -1)
+	{
+      S3FS_PRN_ERR("Could not create temp file(%d)", errno);
+      return -errno;
+	}
+
+    if((b_infile = fdopen(tmpfd, "rb")) == NULL) 
+	{
+      S3FS_PRN_ERR("Could not open tempfile(%d)", errno);
+      return -errno;
+	}
+	
+	partdata.fd         = tmpfd;
     partdata.startpos   = 0;
-	partdata.size       = st.st_size;
+	partdata.size       = CryptUtil::CryptFile(fd2, st.st_size, tmpfd, true);
 	b_partdata_startpos = partdata.startpos;
 	b_partdata_size     = partdata.size;
-	ctx = new CryptContext(fd2, st.st_size, true);
 
   }else{
     // This case is creating zero byte object.(calling by create_file_object())
@@ -2907,8 +2917,9 @@ int S3fsCurl::PutRequest(const char* tpath, headers_t& meta, int fd)
   }
 
   if(!CreateCurlHandle(true)){
-    if(file){
-      fclose(file);
+    if(b_infile){
+	  fclose(b_infile);
+	  close(tmpfd);
     }
     return -1;
   }
@@ -2925,7 +2936,7 @@ int S3fsCurl::PutRequest(const char* tpath, headers_t& meta, int fd)
   // Make request headers
   string strMD5;
   if(-1 != fd && S3fsCurl::is_content_md5){
-    strMD5         = s3fs_get_content_md5(fd);
+    strMD5         = s3fs_get_content_md5(tmpfd);
     requestHeaders = curl_slist_sort_insert(requestHeaders, "Content-MD5", strMD5.c_str());
   }
 
@@ -2975,14 +2986,10 @@ int S3fsCurl::PutRequest(const char* tpath, headers_t& meta, int fd)
   curl_easy_setopt(hCurl, CURLOPT_WRITEDATA, (void*)bodydata);
   curl_easy_setopt(hCurl, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
   curl_easy_setopt(hCurl, CURLOPT_HTTPHEADER, requestHeaders);
-  if(file && ctx){
-    curl_easy_setopt(hCurl, CURLOPT_INFILESIZE_LARGE, ctx->paddedsize); // Content-Length
-    curl_easy_setopt(hCurl, CURLOPT_READFUNCTION, CryptUtil::UploadEncryptedReadCallback);
-    curl_easy_setopt(hCurl, CURLOPT_READDATA, (void*)ctx);
-	/*
+  if(b_infile){
     curl_easy_setopt(hCurl, CURLOPT_INFILESIZE_LARGE, partdata.size); // Content-Length
     curl_easy_setopt(hCurl, CURLOPT_READFUNCTION, S3fsCurl::UploadReadCallback);
-    curl_easy_setopt(hCurl, CURLOPT_READDATA, (void*)this);*/
+    curl_easy_setopt(hCurl, CURLOPT_READDATA, (void*)this);
   }else{
     curl_easy_setopt(hCurl, CURLOPT_INFILESIZE, 0);             // Content-Length: 0
   }
@@ -2991,11 +2998,12 @@ int S3fsCurl::PutRequest(const char* tpath, headers_t& meta, int fd)
   S3FS_PRN_INFO3("uploading... [path=%s][fd=%d][size=%jd]", tpath, fd, (intmax_t)(-1 != fd ? st.st_size : 0));
 
   int result = RequestPerform();
+  S3FS_PRN_INFO("%s", bodydata->print());
   delete bodydata;
   bodydata = NULL;
-  if(file && ctx){
-	delete ctx;
-    fclose(file);
+  if(b_infile){
+    fclose(b_infile);
+	close(tmpfd);
   }
 
   return result;
