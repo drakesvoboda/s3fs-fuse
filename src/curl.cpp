@@ -1760,7 +1760,7 @@ bool S3fsCurl::CreateCurlHandle(bool force)
 
 bool S3fsCurl::DestroyEncCtx(void)
 {
-  if(!ctx)
+  if(ctx == NULL)
     return false;
 
   delete ctx;
@@ -1804,7 +1804,7 @@ bool S3fsCurl::ClearInternalData(void)
   }
   responseHeaders.clear();
   if(bodydata){
-    delete bodydata; S3FS_PRN_INFO("Delete body data");
+    delete bodydata; 
     bodydata = NULL;
   }
   if(headdata){
@@ -2582,7 +2582,7 @@ int S3fsCurl::GetIAMCredentials(void)
     S3FS_PRN_ERR("Something error occurred, could not get IAM credential.");
     result = -EIO;
   }
-  delete bodydata; S3FS_PRN_INFO("Delete body data");
+  delete bodydata; 
   bodydata = NULL;
 
   return result;
@@ -2620,7 +2620,7 @@ bool S3fsCurl::LoadIAMRoleFromMetaData(void)
     S3FS_PRN_ERR("Something error occurred, could not get IAM role name.");
     result = -EIO;
   }
-  delete bodydata; S3FS_PRN_INFO("Delete body data");
+  delete bodydata; 
   bodydata = NULL;
 
   return (0 == result);
@@ -2872,7 +2872,7 @@ int S3fsCurl::PutHeadRequest(const char* tpath, headers_t& meta, bool is_copy)
       result = -EIO;
     }
   }
-  delete bodydata; S3FS_PRN_INFO("Delete body data");
+  delete bodydata;
   bodydata = NULL;
 
   return result;
@@ -2883,6 +2883,8 @@ int S3fsCurl::PutRequest(const char* tpath, headers_t& meta, int fd)
   struct stat st;
   int fd2;
   int tmpfd = -1;
+
+  CryptContext * local_ctx = NULL;
 
   S3FS_PRN_INFO3("[tpath=%s]", SAFESTRPTR(tpath));
 
@@ -2913,17 +2915,17 @@ int S3fsCurl::PutRequest(const char* tpath, headers_t& meta, int fd)
       return -errno;
 	}
 
-	ctx = new CryptContext(fd2, st.st_size, tmpfd, true);
-	ctx->init();
-	size_t encrypted_size = CryptUtil::CryptFile(ctx);
+	local_ctx = new CryptContext(fd2, st.st_size, tmpfd, true);
+	local_ctx->init();
+	size_t encrypted_size = CryptUtil::CryptFile(local_ctx);
+
+	//meta["x-amx-meta-salt"] = local_ctx->salt;
 	
 	partdata.fd         = tmpfd;
     partdata.startpos   = 0;
 	partdata.size       = encrypted_size;
 	b_partdata_startpos = partdata.startpos;
 	b_partdata_size     = partdata.size;
-
-	//meta["amz-meta-salt"] = (const char *)ctx->salt;
 
   }else{
     // This case is creating zero byte object.(calling by create_file_object())
@@ -3012,9 +3014,14 @@ int S3fsCurl::PutRequest(const char* tpath, headers_t& meta, int fd)
   S3FS_PRN_INFO3("uploading... [path=%s][fd=%d][size=%jd]", tpath, fd, (intmax_t)(-1 != fd ? st.st_size : 0));
 
   int result = RequestPerform();
-  S3FS_PRN_INFO("%s", bodydata->print());
-  delete bodydata; S3FS_PRN_INFO("Delete body data");
+  delete bodydata;
   bodydata = NULL;
+
+  if(local_ctx){
+	delete local_ctx;
+	local_ctx = NULL;
+  }
+
   if(b_infile){
     fclose(b_infile);
 	close(tmpfd);
@@ -3064,8 +3071,8 @@ int S3fsCurl::PreGetObjectRequest(const char* tpath, int fd, off_t start, ssize_
   // setopt
   curl_easy_setopt(hCurl, CURLOPT_URL, url.c_str());
   curl_easy_setopt(hCurl, CURLOPT_HTTPHEADER, requestHeaders);
-  //curl_easy_setopt(hCurl, CURLOPT_HEADERDATA, (void*)ctx);
-  //curl_easy_setopt(hCurl, CURLOPT_HEADERFUNCTION, CryptContext::ParseSaltFromHeader);
+  curl_easy_setopt(hCurl, CURLOPT_HEADERDATA, (void*)ctx);
+  curl_easy_setopt(hCurl, CURLOPT_HEADERFUNCTION, CryptContext::ParseSaltFromHeader);
   curl_easy_setopt(hCurl, CURLOPT_WRITEFUNCTION, CryptUtil::DownloadEcryptedWriteCallback);
   curl_easy_setopt(hCurl, CURLOPT_WRITEDATA, (void*)ctx);
   S3fsCurl::AddUserAgent(hCurl);        // put User-Agent
@@ -3287,19 +3294,19 @@ int S3fsCurl::PreMultipartPostRequest(const char* tpath, headers_t& meta, string
   // request
   int result;
   if(0 != (result = RequestPerform())){
-    delete bodydata; S3FS_PRN_INFO("Delete body data");
+    delete bodydata; 
     bodydata = NULL;
     return result;
   }
 
   // Parse XML body for UploadId
   if(!S3fsCurl::GetUploadId(upload_id)){
-    delete bodydata; S3FS_PRN_INFO("Delete body data");
+    delete bodydata; 
     bodydata = NULL;
     return -1;
   }
 
-  delete bodydata; S3FS_PRN_INFO("Delete body data");
+  delete bodydata; 
   bodydata = NULL;
   return 0;
 }
@@ -3369,7 +3376,7 @@ int S3fsCurl::CompleteMultipartPostRequest(const char* tpath, string& upload_id,
 
   // request
   int result = RequestPerform();
-  delete bodydata; S3FS_PRN_INFO("Delete body data");
+  delete bodydata; 
   bodydata = NULL;
   postdata = NULL;
 
@@ -3413,7 +3420,7 @@ int S3fsCurl::MultipartListRequest(string& body)
   }else{
     body = "";
   }
-  delete bodydata; S3FS_PRN_INFO("Delete body data");
+  delete bodydata; 
   bodydata = NULL;
 
   return result;
@@ -3556,7 +3563,7 @@ int S3fsCurl::UploadMultipartPostRequest(const char* tpath, int part_num, const 
   }
 
   // closing
-  delete bodydata; S3FS_PRN_INFO("Delete body data");
+  delete bodydata; 
   bodydata = NULL;
   delete headdata;
   headdata = NULL;
@@ -3651,7 +3658,7 @@ int S3fsCurl::CopyMultipartPostRequest(const char* from, const char* to, int par
     S3FS_XMLFREEDOC(doc);
   }
 
-  delete bodydata; S3FS_PRN_INFO("Delete body data");
+  delete bodydata; 
   bodydata = NULL;
   delete headdata;
   headdata = NULL;

@@ -164,12 +164,12 @@ ssize_t CryptUtil::do_crypt(CryptContext * ctx, const void * inbuff, size_t buff
   int writelen = 0;
 
   if(buffsize > 0){
-	if(EVP_CipherUpdate(&(ctx->ctx), (unsigned char *)outbuff, &writelen, (unsigned char *)inbuff, buffsize) == 0){
+	if(EVP_CipherUpdate(ctx->ctx, (unsigned char *)outbuff, &writelen, (unsigned char *)inbuff, buffsize) == 0){
       S3FS_PRN_ERR("Error while encrypting/decrypting(%d)", errno);
       return -1;
 	}
   }else if(buffsize == 0){	
-	if(EVP_CipherFinal_ex(&(ctx->ctx), (unsigned char *)outbuff, &writelen) == 0){
+	if(EVP_CipherFinal(ctx->ctx, (unsigned char *)outbuff, &writelen) == 0){
       S3FS_PRN_ERR("Error while encrypting/decrypting(%d)", errno);
       return -1;
 	}
@@ -188,33 +188,32 @@ CryptContext::CryptContext(int infd, size_t insize, int outfd, bool do_encrypt):
   paddedsize(insize),
   outfd(outfd),
   finished(bytes_remaining < 1),
-  do_encrypt(do_encrypt),
-  salt(NULL)
+  do_encrypt(do_encrypt)
 {
-  unsigned char saltbuff[CryptContext::SALTSIZE];
+  this->ctx = EVP_CIPHER_CTX_new();
 
   if(do_encrypt){
-    if(RAND_bytes(saltbuff, sizeof(saltbuff)) == 0)
+    if(RAND_bytes((unsigned char *)this->salt, CryptContext::SALTSIZE) == 0){
       S3FS_PRN_ERR("Failed to randomly generate encryption salt");
-
-	this->setSalt(saltbuff, CryptContext::SALTSIZE);
+	}
   }
+
+  this->salt[CryptContext::SALTSIZE] = '\0';
 }
 
-void CryptContext::setSalt(unsigned char * salt, size_t saltlen){
-  //this->salt = new unsigned char[saltlen];
-  //memcpy(this->salt, salt, sizeof(unsigned char) * saltlen);
+void CryptContext::setSalt(const char * saltbuff){
+  strncpy(this->salt, saltbuff, CryptContext::SALTSIZE);
 }
 
 void CryptContext::init()
 {
-  unsigned char key[16], iv[EVP_MAX_IV_LENGTH];
-
-  if(PKCS5_PBKDF2_HMAC(CryptContext::pass, strlen(CryptContext::pass), NULL, 0, 1, CryptContext::digest, 16, key) == 0)
+  if(PKCS5_PBKDF2_HMAC(CryptContext::pass, strlen(CryptContext::pass), (unsigned char *)this->salt, CryptContext::SALTSIZE, 1, CryptContext::digest, 16, this->key) == 0)
     S3FS_PRN_ERR("Failed to generate key");
 
-  EVP_CIPHER_CTX_init(&(this->ctx));
-  EVP_CipherInit_ex(&(this->ctx), CryptContext::cipher, NULL, key, iv, this->do_encrypt);
+  if(0 == EVP_CipherInit(this->ctx, CryptContext::cipher, this->key, NULL, this->do_encrypt)){
+    S3FS_PRN_ERR("Failed to initalize crypt context");
+	return;
+  }
 
   this->initialized = true;
 }
@@ -231,7 +230,7 @@ size_t CryptContext::ParseSaltFromHeader(void * data, size_t blockSize, size_t n
     if(lkey.compare("x-amz-meta-salt") == 0){
       std::string value;
       getline(ss, value);
-	  ctx->setSalt((unsigned char *)value.c_str(), value.length());
+	  ctx->setSalt(value.c_str());
 	  ctx->init();
     }
   }

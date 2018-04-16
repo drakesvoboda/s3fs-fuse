@@ -12,7 +12,7 @@ private:
   const static EVP_CIPHER * cipher;
   const static EVP_MD * digest;
 public:
-  EVP_CIPHER_CTX ctx;
+  EVP_CIPHER_CTX * ctx;
 
   int infd;	// When uploading, read from this fd
 
@@ -30,19 +30,19 @@ public:
   bool do_encrypt;		// Area we encrypting or decrypting?
   bool initialized;		// Have we hashed a key and initialized ctx?
 
-  unsigned char * salt = NULL;
+  char salt[CryptContext::SALTSIZE + 1];
+  unsigned char key[16];
  
   CryptContext(int infd, size_t insize, int outfd, bool do_encrypt);  
 
   ~CryptContext() 
   {
-    EVP_CIPHER_CTX_cleanup(&ctx);
-
-	if(this->salt != NULL)
-		delete this->salt;
+	if(this->ctx && this->initialized){
+      EVP_CIPHER_CTX_free(ctx);
+	}
   }
 
-  void setSalt(unsigned char * salt, size_t saltlen);
+  void setSalt(const char * salt);
 
   void init(); // Initializes the context with key and salt. 
 			   // Must be executed before any bytes are encrypted by the context
