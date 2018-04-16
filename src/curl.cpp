@@ -2884,8 +2884,6 @@ int S3fsCurl::PutRequest(const char* tpath, headers_t& meta, int fd)
   int fd2;
   int tmpfd = -1;
 
-  CryptContext * local_ctx = NULL;
-
   S3FS_PRN_INFO3("[tpath=%s]", SAFESTRPTR(tpath));
 
   if(!tpath){
@@ -2915,11 +2913,15 @@ int S3fsCurl::PutRequest(const char* tpath, headers_t& meta, int fd)
       return -errno;
 	}
 
-	local_ctx = new CryptContext(fd2, st.st_size, tmpfd, true);
+	CryptContext * local_ctx = new CryptContext(fd2, st.st_size, tmpfd, true);
+
 	local_ctx->init();
+
+	meta["x-amx-meta-salt"] = local_ctx->salt;
+
 	size_t encrypted_size = CryptUtil::CryptFile(local_ctx);
 
-	//meta["x-amx-meta-salt"] = local_ctx->salt;
+	delete local_ctx;
 	
 	partdata.fd         = tmpfd;
     partdata.startpos   = 0;
@@ -3016,11 +3018,6 @@ int S3fsCurl::PutRequest(const char* tpath, headers_t& meta, int fd)
   int result = RequestPerform();
   delete bodydata;
   bodydata = NULL;
-
-  if(local_ctx){
-	delete local_ctx;
-	local_ctx = NULL;
-  }
 
   if(b_infile){
     fclose(b_infile);

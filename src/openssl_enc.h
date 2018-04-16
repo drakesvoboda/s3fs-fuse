@@ -1,13 +1,13 @@
 #ifndef ENCRYPTIONUTILITY_H
 #define ENCRYPTIONUTILITY_H
 
+#include <string>
 #include <openssl/evp.h>
 
 class CryptContext {
 friend class CryptUtil;
 private: 
   const static size_t SALTSIZE = 8;
-  const static bool IS_SALTED = false;
   const static char * pass;
   const static EVP_CIPHER * cipher;
   const static EVP_MD * digest;
@@ -30,19 +30,19 @@ public:
   bool do_encrypt;		// Area we encrypting or decrypting?
   bool initialized;		// Have we hashed a key and initialized ctx?
 
-  char salt[CryptContext::SALTSIZE + 1];
-  unsigned char key[16];
+  std::string salt;
  
   CryptContext(int infd, size_t insize, int outfd, bool do_encrypt);  
 
   ~CryptContext() 
   {
-	if(this->ctx && this->initialized){
-      EVP_CIPHER_CTX_free(ctx);
-	}
+	if(ctx)
+	  EVP_CIPHER_CTX_free(ctx);
+	ctx = NULL;
   }
 
-  void setSalt(const char * salt);
+  void setSalt(std::string salt);
+  std::string getSalt();
 
   void init(); // Initializes the context with key and salt. 
 			   // Must be executed before any bytes are encrypted by the context

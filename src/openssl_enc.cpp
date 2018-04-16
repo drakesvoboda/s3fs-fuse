@@ -147,8 +147,6 @@ ssize_t CryptUtil::CryptFile(CryptContext * ctx)
     totalwrite += writelen;
   }
 
-  delete ctx;
-
   S3FS_PRN_INFO("[returning: %ld]", totalwrite);
 
   return totalwrite;
@@ -188,29 +186,40 @@ CryptContext::CryptContext(int infd, size_t insize, int outfd, bool do_encrypt):
   paddedsize(insize),
   outfd(outfd),
   finished(bytes_remaining < 1),
-  do_encrypt(do_encrypt)
+  do_encrypt(do_encrypt),
+  salt("__salted")
 {
   this->ctx = EVP_CIPHER_CTX_new();
 
+  char saltbuff[CryptContext::SALTSIZE + 1]; 
+
   if(do_encrypt){
-    if(RAND_bytes((unsigned char *)this->salt, CryptContext::SALTSIZE) == 0){
+    if(RAND_bytes((unsigned char *)saltbuff, CryptContext::SALTSIZE) == 0){
       S3FS_PRN_ERR("Failed to randomly generate encryption salt");
 	}
+
+	saltbuff[CryptContext::SALTSIZE] = '\0';
   }
 
-  this->salt[CryptContext::SALTSIZE] = '\0';
+  this->salt = std::string(saltbuff);
 }
 
-void CryptContext::setSalt(const char * saltbuff){
-  strncpy(this->salt, saltbuff, CryptContext::SALTSIZE);
+std::string CryptContext::getSalt(){
+  return salt;
+}
+
+void CryptContext::setSalt(std::string salt){
+  this->salt = salt;
 }
 
 void CryptContext::init()
 {
-  if(PKCS5_PBKDF2_HMAC(CryptContext::pass, strlen(CryptContext::pass), (unsigned char *)this->salt, CryptContext::SALTSIZE, 1, CryptContext::digest, 16, this->key) == 0)
+  unsigned char key[16], iv[EVP_MAX_IV_LENGTH];
+
+  if(PKCS5_PBKDF2_HMAC(CryptContext::pass, strlen(CryptContext::pass), (unsigned char *)this->salt.c_str(), this->salt.length(), 1, CryptContext::digest, 16, key) == 0)
     S3FS_PRN_ERR("Failed to generate key");
 
-  if(0 == EVP_CipherInit(this->ctx, CryptContext::cipher, this->key, NULL, this->do_encrypt)){
+  if(0 == EVP_CipherInit(this->ctx, CryptContext::cipher, key, iv, this->do_encrypt)){
     S3FS_PRN_ERR("Failed to initalize crypt context");
 	return;
   }
@@ -230,7 +239,7 @@ size_t CryptContext::ParseSaltFromHeader(void * data, size_t blockSize, size_t n
     if(lkey.compare("x-amz-meta-salt") == 0){
       std::string value;
       getline(ss, value);
-	  ctx->setSalt(value.c_str());
+	  ctx->setSalt(value);
 	  ctx->init();
     }
   }
