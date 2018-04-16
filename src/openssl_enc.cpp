@@ -15,6 +15,7 @@
 #include <assert.h>
 #include <dirent.h>
 #include <curl/curl.h>
+#include <algorithm>
 #include <string>
 #include <iostream>
 #include <sstream>
@@ -27,9 +28,9 @@
 #include "curl.h"
 
 // Set Statics
-const char * CryptUtil::pass = "key";
-const EVP_CIPHER * CryptUtil::cipher = EVP_rc4();
-const EVP_MD * CryptUtil::digest = EVP_md5();
+const char * CryptContext::pass = "key";
+const EVP_CIPHER * CryptContext::cipher = EVP_rc4();
+const EVP_MD * CryptContext::digest = EVP_md5();
 
 ssize_t CryptUtil::DownloadEcryptedWriteCallback(void * ptr, size_t size, size_t nmemb, void * userp)
 {
@@ -44,7 +45,7 @@ ssize_t CryptUtil::DownloadEcryptedWriteCallback(void * ptr, size_t size, size_t
 
   unsigned char * outbuff = new unsigned char[copysize + EVP_MAX_BLOCK_LENGTH];
 
-  if(ctx->fd == -1){
+  if(ctx->outfd == -1){
 	S3FS_PRN_ERR("Missing file descriptor for write.");
 	return -1;
   }
@@ -57,7 +58,7 @@ ssize_t CryptUtil::DownloadEcryptedWriteCallback(void * ptr, size_t size, size_t
 	  return -1;
     }
 
-    writelen = pwrite(ctx->fd, (const void *)outbuff, cryptlen, ctx->bytes_finished + totalwrite);
+    writelen = pwrite(ctx->outfd, (const void *)outbuff, cryptlen, ctx->bytes_finished + totalwrite);
 
     if(writelen == -1){
 	  S3FS_PRN_ERR("Error writing to file(%d)", errno); 
@@ -77,7 +78,7 @@ ssize_t CryptUtil::DownloadEcryptedWriteCallback(void * ptr, size_t size, size_t
 	  return -1;
     }
 
-    writelen = pwrite(ctx->fd, (const void *)outbuff, cryptlen, ctx->bytes_finished + totalwrite);
+    writelen = pwrite(ctx->outfd, (const void *)outbuff, cryptlen, ctx->bytes_finished + totalwrite);
 
     if(writelen == -1){
 	  S3FS_PRN_ERR("Error writing to file(%d)", errno); 
@@ -90,17 +91,11 @@ ssize_t CryptUtil::DownloadEcryptedWriteCallback(void * ptr, size_t size, size_t
   ctx->bytes_finished += totalwrite;
 
   S3FS_PRN_INFO("[sent: %ld][written: %ld][remaining: %ld]", requested_size, totalwrite, ctx->bytes_remaining);
-  S3FS_PRN_INFO("[text: %s]", (char *)ptr);
-
   return totalwrite;
 }
 
-ssize_t CryptUtil::CryptFile(int in_fd, int out_fd, bool do_encrypt)
+ssize_t CryptUtil::CryptFile(CryptContext * ctx)
 {
-  S3FS_PRN_INFO("[in_fd: %d][out_fd: %d][mode: %s]", in_fd, out_fd, do_encrypt ? "encrypt" : "decrypt");
-
-  CryptContext * ctx = new CryptContext(in_fd, -1, do_encrypt);
-
   ssize_t cryptlen;
   ssize_t readlen, totalread = 0, writelen, totalwrite = 0;
 
@@ -110,8 +105,7 @@ ssize_t CryptUtil::CryptFile(int in_fd, int out_fd, bool do_encrypt)
   unsigned char outbuff[buffsize + EVP_MAX_BLOCK_LENGTH];
 
   for(;;totalread += readlen, totalwrite += writelen){
-	readlen = pread(in_fd, (void *)inbuff, buffsize, totalread);
-    S3FS_PRN_INFO("[read: %ld][text: %s]", readlen, inbuff)
+	readlen = pread(ctx->infd, (void *)inbuff, buffsize, totalread);
 
 	if(readlen == 0) break;
 	else if(readlen == -1){
@@ -127,7 +121,7 @@ ssize_t CryptUtil::CryptFile(int in_fd, int out_fd, bool do_encrypt)
 	  return -1;
 	}
 
-	writelen = pwrite(out_fd, (const void *)outbuff, cryptlen, totalwrite);
+	writelen = pwrite(ctx->outfd, (const void *)outbuff, cryptlen, totalwrite);
 	
 	if(writelen == -1){
 	  S3FS_PRN_ERR("Error writing to file(%d)", errno); 
@@ -143,7 +137,7 @@ ssize_t CryptUtil::CryptFile(int in_fd, int out_fd, bool do_encrypt)
 	  return -1;
     }
   
-    writelen = pwrite(out_fd, (const void *)outbuff, cryptlen, totalwrite);
+    writelen = pwrite(ctx->outfd, (const void *)outbuff, cryptlen, totalwrite);
 	
     if(writelen == -1){
 	  S3FS_PRN_ERR("Error writing to file(%d)", errno); 
@@ -162,6 +156,11 @@ ssize_t CryptUtil::CryptFile(int in_fd, int out_fd, bool do_encrypt)
 
 ssize_t CryptUtil::do_crypt(CryptContext * ctx, const void * inbuff, size_t buffsize, void * outbuff)
 {
+  if(!ctx->initialized){
+    S3FS_PRN_ERR("This encryption context has not been initialized");
+	return -1;
+  }
+
   int writelen = 0;
 
   if(buffsize > 0){
@@ -182,24 +181,62 @@ ssize_t CryptUtil::do_crypt(CryptContext * ctx, const void * inbuff, size_t buff
   return writelen;
 }
 
-CryptContext::CryptContext(int fd, size_t size, bool do_encrypt): 
-  fd(fd), 
-  bytes_remaining(size), 
+CryptContext::CryptContext(int infd, size_t insize, int outfd, bool do_encrypt): 
+  infd(infd), 
+  bytes_remaining(insize), 
   bytes_finished(0), 
-  paddedsize(size),
-  do_encrypt(do_encrypt)
+  paddedsize(insize),
+  outfd(outfd),
+  finished(bytes_remaining < 1),
+  do_encrypt(do_encrypt),
+  salt(NULL)
+{
+  unsigned char saltbuff[CryptContext::SALTSIZE];
+
+  if(do_encrypt){
+    if(RAND_bytes(saltbuff, sizeof(saltbuff)) == 0)
+      S3FS_PRN_ERR("Failed to randomly generate encryption salt");
+
+	this->setSalt(saltbuff, CryptContext::SALTSIZE);
+  }
+}
+
+void CryptContext::setSalt(unsigned char * salt, size_t saltlen){
+  //this->salt = new unsigned char[saltlen];
+  //memcpy(this->salt, salt, sizeof(unsigned char) * saltlen);
+}
+
+void CryptContext::init()
 {
   unsigned char key[16], iv[EVP_MAX_IV_LENGTH];
-  int saltlen = 0;
-  salt = NULL;
 
-  if(PKCS5_PBKDF2_HMAC(CryptUtil::pass, strlen(CryptUtil::pass), salt, saltlen, 1, CryptUtil::digest, 16, key) == 0)
+  if(PKCS5_PBKDF2_HMAC(CryptContext::pass, strlen(CryptContext::pass), NULL, 0, 1, CryptContext::digest, 16, key) == 0)
     S3FS_PRN_ERR("Failed to generate key");
 
-  EVP_CIPHER_CTX_init(&ctx);
-  EVP_CipherInit_ex(&ctx, CryptUtil::cipher, NULL, key, iv, do_encrypt);
-  initialized = true;
-  finished = bytes_remaining < 1;
+  EVP_CIPHER_CTX_init(&(this->ctx));
+  EVP_CipherInit_ex(&(this->ctx), CryptContext::cipher, NULL, key, iv, this->do_encrypt);
+
+  this->initialized = true;
+}
+
+size_t CryptContext::ParseSaltFromHeader(void * data, size_t blockSize, size_t numBlocks, void * userPtr){
+  CryptContext * ctx = reinterpret_cast<CryptContext*>(userPtr);
+  std::string header(reinterpret_cast<char*>(data), blockSize * numBlocks);
+  std::string key;
+  std::stringstream ss(header);
+
+  if(!ctx->initialized && getline(ss, key, ':')){
+    std::string lkey = key;
+    std::transform(lkey.begin(), lkey.end(), lkey.begin(), static_cast<int (*)(int)>(std::tolower));
+    if(lkey.compare("x-amz-meta-salt") == 0){
+      std::string value;
+      getline(ss, value);
+	  ctx->setSalt((unsigned char *)value.c_str(), value.length());
+	  ctx->init();
+    }
+  }
+
+  return blockSize * numBlocks;
 }
 
 /*

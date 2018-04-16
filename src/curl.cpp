@@ -824,8 +824,6 @@ size_t S3fsCurl::UploadReadCallback(void* ptr, size_t size, size_t nmemb, void* 
 {
   S3fsCurl* pCurl = reinterpret_cast<S3fsCurl*>(userp);
 
-  S3FS_PRN_INFO("");
-
   if(1 > (size * nmemb)){
     return 0;
   }
@@ -850,9 +848,6 @@ size_t S3fsCurl::UploadReadCallback(void* ptr, size_t size, size_t nmemb, void* 
   }
   pCurl->partdata.startpos += totalread;
   pCurl->partdata.size     -= totalread;
-
-  S3FS_PRN_INFO("[requested: %ld][given: %ld]", size * nmemb, totalread)
-  S3FS_PRN_INFO("[text: %s]", (char*)ptr);
 
   return totalread;
 }
@@ -1809,7 +1804,7 @@ bool S3fsCurl::ClearInternalData(void)
   }
   responseHeaders.clear();
   if(bodydata){
-    delete bodydata;
+    delete bodydata; S3FS_PRN_INFO("Delete body data");
     bodydata = NULL;
   }
   if(headdata){
@@ -2587,7 +2582,7 @@ int S3fsCurl::GetIAMCredentials(void)
     S3FS_PRN_ERR("Something error occurred, could not get IAM credential.");
     result = -EIO;
   }
-  delete bodydata;
+  delete bodydata; S3FS_PRN_INFO("Delete body data");
   bodydata = NULL;
 
   return result;
@@ -2625,7 +2620,7 @@ bool S3fsCurl::LoadIAMRoleFromMetaData(void)
     S3FS_PRN_ERR("Something error occurred, could not get IAM role name.");
     result = -EIO;
   }
-  delete bodydata;
+  delete bodydata; S3FS_PRN_INFO("Delete body data");
   bodydata = NULL;
 
   return (0 == result);
@@ -2877,7 +2872,7 @@ int S3fsCurl::PutHeadRequest(const char* tpath, headers_t& meta, bool is_copy)
       result = -EIO;
     }
   }
-  delete bodydata;
+  delete bodydata; S3FS_PRN_INFO("Delete body data");
   bodydata = NULL;
 
   return result;
@@ -2914,15 +2909,21 @@ int S3fsCurl::PutRequest(const char* tpath, headers_t& meta, int fd)
 
     if((b_infile = fdopen(tmpfd, "rb")) == NULL) 
 	{
-      S3FS_PRN_ERR("Could not open tempfile(%d)", errno);
+      S3FS_PRN_ERR("Could not open temp file(%d)", errno);
       return -errno;
 	}
+
+	ctx = new CryptContext(fd2, st.st_size, tmpfd, true);
+	ctx->init();
+	size_t encrypted_size = CryptUtil::CryptFile(ctx);
 	
 	partdata.fd         = tmpfd;
     partdata.startpos   = 0;
-	partdata.size       = CryptUtil::CryptFile(fd2, tmpfd, true);
+	partdata.size       = encrypted_size;
 	b_partdata_startpos = partdata.startpos;
 	b_partdata_size     = partdata.size;
+
+	//meta["amz-meta-salt"] = (const char *)ctx->salt;
 
   }else{
     // This case is creating zero byte object.(calling by create_file_object())
@@ -3012,7 +3013,7 @@ int S3fsCurl::PutRequest(const char* tpath, headers_t& meta, int fd)
 
   int result = RequestPerform();
   S3FS_PRN_INFO("%s", bodydata->print());
-  delete bodydata;
+  delete bodydata; S3FS_PRN_INFO("Delete body data");
   bodydata = NULL;
   if(b_infile){
     fclose(b_infile);
@@ -3054,7 +3055,7 @@ int S3fsCurl::PreGetObjectRequest(const char* tpath, int fd, off_t start, ssize_
     S3FS_PRN_WARN("Failed to set SSE header, but continue...");
   }
 
-  ctx = new CryptContext(fd, size, false);
+  ctx = new CryptContext(-1, size, fd, false);
 
   op = "GET";
   type = REQTYPE_GET;
@@ -3063,6 +3064,8 @@ int S3fsCurl::PreGetObjectRequest(const char* tpath, int fd, off_t start, ssize_
   // setopt
   curl_easy_setopt(hCurl, CURLOPT_URL, url.c_str());
   curl_easy_setopt(hCurl, CURLOPT_HTTPHEADER, requestHeaders);
+  //curl_easy_setopt(hCurl, CURLOPT_HEADERDATA, (void*)ctx);
+  //curl_easy_setopt(hCurl, CURLOPT_HEADERFUNCTION, CryptContext::ParseSaltFromHeader);
   curl_easy_setopt(hCurl, CURLOPT_WRITEFUNCTION, CryptUtil::DownloadEcryptedWriteCallback);
   curl_easy_setopt(hCurl, CURLOPT_WRITEDATA, (void*)ctx);
   S3fsCurl::AddUserAgent(hCurl);        // put User-Agent
@@ -3284,19 +3287,19 @@ int S3fsCurl::PreMultipartPostRequest(const char* tpath, headers_t& meta, string
   // request
   int result;
   if(0 != (result = RequestPerform())){
-    delete bodydata;
+    delete bodydata; S3FS_PRN_INFO("Delete body data");
     bodydata = NULL;
     return result;
   }
 
   // Parse XML body for UploadId
   if(!S3fsCurl::GetUploadId(upload_id)){
-    delete bodydata;
+    delete bodydata; S3FS_PRN_INFO("Delete body data");
     bodydata = NULL;
     return -1;
   }
 
-  delete bodydata;
+  delete bodydata; S3FS_PRN_INFO("Delete body data");
   bodydata = NULL;
   return 0;
 }
@@ -3366,7 +3369,7 @@ int S3fsCurl::CompleteMultipartPostRequest(const char* tpath, string& upload_id,
 
   // request
   int result = RequestPerform();
-  delete bodydata;
+  delete bodydata; S3FS_PRN_INFO("Delete body data");
   bodydata = NULL;
   postdata = NULL;
 
@@ -3410,7 +3413,7 @@ int S3fsCurl::MultipartListRequest(string& body)
   }else{
     body = "";
   }
-  delete bodydata;
+  delete bodydata; S3FS_PRN_INFO("Delete body data");
   bodydata = NULL;
 
   return result;
@@ -3553,7 +3556,7 @@ int S3fsCurl::UploadMultipartPostRequest(const char* tpath, int part_num, const 
   }
 
   // closing
-  delete bodydata;
+  delete bodydata; S3FS_PRN_INFO("Delete body data");
   bodydata = NULL;
   delete headdata;
   headdata = NULL;
@@ -3648,7 +3651,7 @@ int S3fsCurl::CopyMultipartPostRequest(const char* from, const char* to, int par
     S3FS_XMLFREEDOC(doc);
   }
 
-  delete bodydata;
+  delete bodydata; S3FS_PRN_INFO("Delete body data");
   bodydata = NULL;
   delete headdata;
   headdata = NULL;
