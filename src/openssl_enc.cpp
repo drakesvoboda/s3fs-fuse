@@ -253,11 +253,9 @@ size_t CryptContext::ParseSaltFromHeader(void * data, size_t blockSize, size_t n
       if(lkey.compare(0,15,"x-amz-meta-salt") == 0){
         std::string value;
         getline(ss, value);
-		S3FS_PRN_INFO("[BASE64SALT: %s]", value.c_str());
-        unsigned char * decoded_salt = base64_decode(value);
-	    ctx->setSalt((const char *)decoded_salt);
-		S3FS_PRN_INFO("[SALT: %s]", decoded_salt);
-		delete decoded_salt;
+		size_t plen;
+        unsigned char * salt = s3fs_decode64((const char *)trim(value).c_str(), &plen);
+	    ctx->setSalt((const char *)salt);
 	    ctx->init();
       }
     }

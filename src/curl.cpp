@@ -2918,11 +2918,13 @@ int S3fsCurl::PutRequest(const char* tpath, headers_t& meta, int fd)
 
 	local_ctx->init();
 
+    size_t plen;
+    char * base64_salt = s3fs_base64((unsigned char *)local_ctx->salt, strlen(local_ctx->salt));
+    unsigned char * decode = s3fs_decode64(base64_salt, &plen);
+    requestHeaders = curl_slist_sort_insert(requestHeaders, "x-amz-meta-salt", base64_salt);
 
-    std::string base64_salt = base64_encode((unsigned char *)local_ctx->salt, strlen(local_ctx->salt));
-    requestHeaders = curl_slist_sort_insert(requestHeaders, "x-amz-meta-salt", base64_salt.c_str());
-	S3FS_PRN_INFO("[SALT: %s]", local_ctx->salt);
-	S3FS_PRN_INFO("[BASE64SALT: %s]", base64_salt.c_str());
+	free(base64_salt);
+	free(decode);
 
 	size_t encrypted_size = CryptUtil::CryptFile(local_ctx);
 
