@@ -25,6 +25,7 @@
 
 #include "common.h"
 #include "openssl_enc.h"
+#include "string_util.h"
 #include "curl.h"
 
 // Set Statics
@@ -159,6 +160,11 @@ ssize_t CryptUtil::do_crypt(CryptContext * ctx, const void * inbuff, size_t buff
 	return -1;
   }
 
+  if(ctx->finished){
+    S3FS_PRN_INFO("This encryption context has already finished");
+	return 0;
+  }
+
   int writelen = 0;
 
   if(buffsize > 0){
@@ -185,9 +191,10 @@ CryptContext::CryptContext(int infd, size_t insize, int outfd, bool do_encrypt):
   bytes_finished(0), 
   paddedsize(insize),
   outfd(outfd),
-  finished(bytes_remaining < 1),
+  finished(false),
   do_encrypt(do_encrypt),
-  salt("__salted")
+  initialized(false),
+  salt(NULL)
 {
   this->ctx = EVP_CIPHER_CTX_new();
 
@@ -199,24 +206,31 @@ CryptContext::CryptContext(int infd, size_t insize, int outfd, bool do_encrypt):
 	}
 
 	saltbuff[CryptContext::SALTSIZE] = '\0';
+	setSalt(saltbuff);
   }
 
-  this->salt = std::string(saltbuff);
 }
 
-std::string CryptContext::getSalt(){
+const char * CryptContext::getSalt() const{
+  static const char * nullret = "";
+  if(!salt)
+	return nullret;
   return salt;
 }
 
-void CryptContext::setSalt(std::string salt){
-  this->salt = salt;
+void CryptContext::setSalt(const char * salt){
+  if(this->salt)
+    delete [] this->salt;
+  
+  this->salt = new char[strlen(salt)+1];
+  strcpy(this->salt, salt);
 }
 
 void CryptContext::init()
 {
   unsigned char key[16], iv[EVP_MAX_IV_LENGTH];
 
-  if(PKCS5_PBKDF2_HMAC(CryptContext::pass, strlen(CryptContext::pass), (unsigned char *)this->salt.c_str(), this->salt.length(), 1, CryptContext::digest, 16, key) == 0)
+  if(PKCS5_PBKDF2_HMAC(CryptContext::pass, strlen(CryptContext::pass), (unsigned char *)this->salt, strlen(this->salt), 1, CryptContext::digest, 16, key) == 0)
     S3FS_PRN_ERR("Failed to generate key");
 
   if(0 == EVP_CipherInit(this->ctx, CryptContext::cipher, key, iv, this->do_encrypt)){
@@ -229,21 +243,25 @@ void CryptContext::init()
 
 size_t CryptContext::ParseSaltFromHeader(void * data, size_t blockSize, size_t numBlocks, void * userPtr){
   CryptContext * ctx = reinterpret_cast<CryptContext*>(userPtr);
-  std::string header(reinterpret_cast<char*>(data), blockSize * numBlocks);
-  std::string key;
-  std::stringstream ss(header);
-
-  if(!ctx->initialized && getline(ss, key, ':')){
-    std::string lkey = key;
-    std::transform(lkey.begin(), lkey.end(), lkey.begin(), static_cast<int (*)(int)>(std::tolower));
-    if(lkey.compare("x-amz-meta-salt") == 0){
-      std::string value;
-      getline(ss, value);
-	  ctx->setSalt(value);
-	  ctx->init();
+  if(!ctx->initialized){
+    std::string header(reinterpret_cast<char*>(data), blockSize * numBlocks);
+    std::string key;
+    std::stringstream ss(header);
+    if(getline(ss, key, ':')){
+      std::string lkey = key;
+      std::transform(lkey.begin(), lkey.end(), lkey.begin(), static_cast<int (*)(int)>(std::tolower));
+      if(lkey.compare(0,15,"x-amz-meta-salt") == 0){
+        std::string value;
+        getline(ss, value);
+		S3FS_PRN_INFO("[BASE64SALT: %s]", value.c_str());
+        unsigned char * decoded_salt = base64_decode(value);
+	    ctx->setSalt((const char *)decoded_salt);
+		S3FS_PRN_INFO("[SALT: %s]", decoded_salt);
+		delete decoded_salt;
+	    ctx->init();
+      }
     }
   }
-
   return blockSize * numBlocks;
 }
 

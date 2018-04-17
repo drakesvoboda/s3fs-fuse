@@ -30,7 +30,7 @@ public:
   bool do_encrypt;		// Area we encrypting or decrypting?
   bool initialized;		// Have we hashed a key and initialized ctx?
 
-  std::string salt;
+  char * salt;
  
   CryptContext(int infd, size_t insize, int outfd, bool do_encrypt);  
 
@@ -38,11 +38,13 @@ public:
   {
 	if(ctx)
 	  EVP_CIPHER_CTX_free(ctx);
-	ctx = NULL;
+
+    if(this->salt)
+      delete [] this->salt;
   }
 
-  void setSalt(std::string salt);
-  std::string getSalt();
+  void setSalt(const char * salt);
+  const char * getSalt() const;
 
   void init(); // Initializes the context with key and salt. 
 			   // Must be executed before any bytes are encrypted by the context

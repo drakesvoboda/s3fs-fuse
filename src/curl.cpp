@@ -2883,6 +2883,7 @@ int S3fsCurl::PutRequest(const char* tpath, headers_t& meta, int fd)
   struct stat st;
   int fd2;
   int tmpfd = -1;
+  requestHeaders  = NULL;
 
   S3FS_PRN_INFO3("[tpath=%s]", SAFESTRPTR(tpath));
 
@@ -2917,7 +2918,11 @@ int S3fsCurl::PutRequest(const char* tpath, headers_t& meta, int fd)
 
 	local_ctx->init();
 
-	meta["x-amx-meta-salt"] = local_ctx->salt;
+
+    std::string base64_salt = base64_encode((unsigned char *)local_ctx->salt, strlen(local_ctx->salt));
+    requestHeaders = curl_slist_sort_insert(requestHeaders, "x-amz-meta-salt", base64_salt.c_str());
+	S3FS_PRN_INFO("[SALT: %s]", local_ctx->salt);
+	S3FS_PRN_INFO("[BASE64SALT: %s]", base64_salt.c_str());
 
 	size_t encrypted_size = CryptUtil::CryptFile(local_ctx);
 
@@ -2947,7 +2952,6 @@ int S3fsCurl::PutRequest(const char* tpath, headers_t& meta, int fd)
 
   url             = prepare_url(turl.c_str());
   path            = get_realpath(tpath);
-  requestHeaders  = NULL;
   responseHeaders.clear();
   bodydata        = new BodyData();
 
