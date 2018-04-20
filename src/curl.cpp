@@ -50,7 +50,7 @@
 #include "s3fs_util.h"
 #include "s3fs_auth.h"
 #include "addhead.h"
-#include "openssl_enc.h"
+#include "comp_and_crypt.h"
 
 using namespace std;
 
@@ -2890,6 +2890,7 @@ int S3fsCurl::PutRequest(const char* tpath, headers_t& meta, int fd)
   if(!tpath){
     return -1;
   }
+
   if(-1 != fd){
     // duplicate fd
     if(-1 == (fd2 = dup(fd)) || -1 == fstat(fd2, &st) || 0 != lseek(fd2, 0, SEEK_SET)){
@@ -2900,7 +2901,7 @@ int S3fsCurl::PutRequest(const char* tpath, headers_t& meta, int fd)
       return -errno;
     }
 
-	char filename[] = "s3fsXXXXXX";
+	char filename[] = "/tmp/s3fs.XXXXXX";
 
 	if((tmpfd = mkstemp(filename)) == -1)
 	{
@@ -2914,20 +2915,14 @@ int S3fsCurl::PutRequest(const char* tpath, headers_t& meta, int fd)
       return -errno;
 	}
 
-	CryptContext * local_ctx = new CryptContext(fd2, st.st_size, tmpfd, true);
-
+	CompCryptContext * local_ctx = new CompCryptContext(fd2, st.st_size, tmpfd, true);
 	local_ctx->init();
 
-    size_t plen;
-    char * base64_salt = s3fs_base64((unsigned char *)local_ctx->salt, strlen(local_ctx->salt));
-    unsigned char * decode = s3fs_decode64(base64_salt, &plen);
+    char * base64_salt = s3fs_base64((unsigned char *)local_ctx->cryptctx->salt, strlen(local_ctx->cryptctx->salt));
     requestHeaders = curl_slist_sort_insert(requestHeaders, "x-amz-meta-salt", base64_salt);
-
 	free(base64_salt);
-	free(decode);
 
-	size_t encrypted_size = CryptUtil::CryptFile(local_ctx);
-
+	size_t encrypted_size = CompCryptUtil::ProcessFile(local_ctx);
 	delete local_ctx;
 	
 	partdata.fd         = tmpfd;
@@ -2948,6 +2943,7 @@ int S3fsCurl::PutRequest(const char* tpath, headers_t& meta, int fd)
     }
     return -1;
   }
+
   string resource;
   string turl;
   MakeUrlResource(get_realpath(tpath).c_str(), resource, turl);
@@ -3065,7 +3061,7 @@ int S3fsCurl::PreGetObjectRequest(const char* tpath, int fd, off_t start, ssize_
     S3FS_PRN_WARN("Failed to set SSE header, but continue...");
   }
 
-  ctx = new CryptContext(-1, size, fd, false);
+  ctx = new CompCryptContext(-1, size, fd, false);
 
   op = "GET";
   type = REQTYPE_GET;
@@ -3074,9 +3070,9 @@ int S3fsCurl::PreGetObjectRequest(const char* tpath, int fd, off_t start, ssize_
   // setopt
   curl_easy_setopt(hCurl, CURLOPT_URL, url.c_str());
   curl_easy_setopt(hCurl, CURLOPT_HTTPHEADER, requestHeaders);
-  curl_easy_setopt(hCurl, CURLOPT_HEADERDATA, (void*)ctx);
+  curl_easy_setopt(hCurl, CURLOPT_HEADERDATA, (void*)ctx->cryptctx);
   curl_easy_setopt(hCurl, CURLOPT_HEADERFUNCTION, CryptContext::ParseSaltFromHeader);
-  curl_easy_setopt(hCurl, CURLOPT_WRITEFUNCTION, CryptUtil::DownloadEcryptedWriteCallback);
+  curl_easy_setopt(hCurl, CURLOPT_WRITEFUNCTION, CompCryptUtil::DownloadWriteCallback);
   curl_easy_setopt(hCurl, CURLOPT_WRITEDATA, (void*)ctx);
   S3fsCurl::AddUserAgent(hCurl);        // put User-Agent
 

@@ -56,9 +56,6 @@ bool get_keyword_value(std::string& target, const char* keyword, std::string& va
 std::string s3fs_hex(const unsigned char* input, size_t length);
 char* s3fs_base64(const unsigned char* input, size_t length);
 unsigned char* s3fs_decode64(const char* input, size_t* plength);
-
-std::string base64_decode(std::string const& encoded_string);
-std::string base64_encode(unsigned char const* bytes_to_encode, unsigned int in_len);
 #endif // S3FS_STRING_UTIL_H_
 
 /*

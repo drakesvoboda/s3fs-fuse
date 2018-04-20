@@ -2513,6 +2513,7 @@ static int list_bucket(const char* path, S3ObjList& head, const char* delimiter,
       return result;
     }
     body = s3fscurl.GetBodyData();
+	S3FS_PRN_INFO("[List Bucket: %s]", body->print());
 
     // xmlDocPtr
     if(NULL == (doc = xmlReadMemory(body->str(), static_cast<int>(body->size()), "", NULL, 0))){

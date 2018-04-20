@@ -26,132 +26,11 @@
 #include "common.h"
 #include "openssl_enc.h"
 #include "string_util.h"
-#include "curl.h"
 
 // Set Statics
 const char * CryptContext::pass = "key";
 const EVP_CIPHER * CryptContext::cipher = EVP_rc4();
 const EVP_MD * CryptContext::digest = EVP_md5();
-
-ssize_t CryptUtil::DownloadEcryptedWriteCallback(void * ptr, size_t size, size_t nmemb, void * userp)
-{
-  CryptContext * ctx = reinterpret_cast<CryptContext*>(userp);
-
-  size_t requested_size = size * nmemb;
-
-  S3FS_PRN_INFO("[sent: %ld][remaining: %ld]", requested_size, ctx->bytes_remaining);
-
-  ssize_t cryptlen, writelen, totalwrite = 0;
-  size_t copysize = ((ssize_t)requested_size < ctx->bytes_remaining) ? requested_size : ctx->bytes_remaining;
-
-  unsigned char * outbuff = new unsigned char[copysize + EVP_MAX_BLOCK_LENGTH];
-
-  if(ctx->outfd == -1){
-	S3FS_PRN_ERR("Missing file descriptor for write.");
-	return -1;
-  }
-
-  if(copysize > 0){	
-	cryptlen = CryptUtil::do_crypt(ctx, ptr, copysize, (void *)outbuff);
-
-    if (cryptlen == -1){
-	  S3FS_PRN_ERR("Error during crypt(%d)", errno); 
-	  return -1;
-    }
-
-    writelen = pwrite(ctx->outfd, (const void *)outbuff, cryptlen, ctx->bytes_finished + totalwrite);
-
-    if(writelen == -1){
-	  S3FS_PRN_ERR("Error writing to file(%d)", errno); 
-	  return -1;
-    }
-
-	totalwrite += writelen;
-  }
-
-  ctx->bytes_remaining -= copysize;
-
-  if(ctx->bytes_remaining < 1 && !ctx->finished){
-    cryptlen = do_crypt(ctx, (unsigned char*)ptr, 0, outbuff);
-
-    if (cryptlen == -1){
-	  S3FS_PRN_ERR("Error during crypt(%d)", errno); 
-	  return -1;
-    }
-
-    writelen = pwrite(ctx->outfd, (const void *)outbuff, cryptlen, ctx->bytes_finished + totalwrite);
-
-    if(writelen == -1){
-	  S3FS_PRN_ERR("Error writing to file(%d)", errno); 
-	  return -1;
-    }
-
-    totalwrite += writelen;
-  }
-
-  ctx->bytes_finished += totalwrite;
-
-  S3FS_PRN_INFO("[sent: %ld][written: %ld][remaining: %ld]", requested_size, totalwrite, ctx->bytes_remaining);
-  return totalwrite;
-}
-
-ssize_t CryptUtil::CryptFile(CryptContext * ctx)
-{
-  ssize_t cryptlen;
-  ssize_t readlen, totalread = 0, writelen, totalwrite = 0;
-
-  size_t buffsize = 16 * 1024;
-
-  unsigned char inbuff[buffsize];
-  unsigned char outbuff[buffsize + EVP_MAX_BLOCK_LENGTH];
-
-  for(;;totalread += readlen, totalwrite += writelen){
-	readlen = pread(ctx->infd, (void *)inbuff, buffsize, totalread);
-
-	if(readlen == 0) break;
-	else if(readlen == -1){
-	  S3FS_PRN_ERR("Error reading from file(%d)", errno); 
-	  return -1;
-	}
-	
-	cryptlen = do_crypt(ctx, (const void *)inbuff, readlen, (void *)outbuff);
-
-	if (cryptlen == 0) break;
-	else if (cryptlen == -1){
-	  S3FS_PRN_ERR("Error during crypt(%d)", errno); 
-	  return -1;
-	}
-
-	writelen = pwrite(ctx->outfd, (const void *)outbuff, cryptlen, totalwrite);
-	
-	if(writelen == -1){
-	  S3FS_PRN_ERR("Error writing to file(%d)", errno); 
-	  return -1;
-	}
-  }
-
-  if(!ctx->finished){
-    cryptlen = do_crypt(ctx, inbuff, 0, outbuff); // Finish crypt
-
-    if (cryptlen == -1){
-      S3FS_PRN_ERR("Error during crypt(%d)", errno); 
-	  return -1;
-    }
-  
-    writelen = pwrite(ctx->outfd, (const void *)outbuff, cryptlen, totalwrite);
-	
-    if(writelen == -1){
-	  S3FS_PRN_ERR("Error writing to file(%d)", errno); 
-	  return -1;
-    }
-
-    totalwrite += writelen;
-  }
-
-  S3FS_PRN_INFO("[returning: %ld]", totalwrite);
-
-  return totalwrite;
-}
 
 ssize_t CryptUtil::do_crypt(CryptContext * ctx, const void * inbuff, size_t buffsize, void * outbuff)
 {
@@ -185,22 +64,16 @@ ssize_t CryptUtil::do_crypt(CryptContext * ctx, const void * inbuff, size_t buff
   return writelen;
 }
 
-CryptContext::CryptContext(int infd, size_t insize, int outfd, bool do_encrypt): 
-  infd(infd), 
-  bytes_remaining(insize), 
-  bytes_finished(0), 
-  paddedsize(insize),
-  outfd(outfd),
-  finished(false),
+CryptContext::CryptContext(bool do_encrypt): 
+  ctx(EVP_CIPHER_CTX_new()),
   do_encrypt(do_encrypt),
   initialized(false),
+  finished(false),
   salt(NULL)
 {
-  this->ctx = EVP_CIPHER_CTX_new();
-
   char saltbuff[CryptContext::SALTSIZE + 1]; 
 
-  if(do_encrypt){
+  if(do_encrypt){ //If we are encrypting, generate random salt
     if(RAND_bytes((unsigned char *)saltbuff, CryptContext::SALTSIZE) == 0){
       S3FS_PRN_ERR("Failed to randomly generate encryption salt");
 	}
@@ -208,7 +81,6 @@ CryptContext::CryptContext(int infd, size_t insize, int outfd, bool do_encrypt):
 	saltbuff[CryptContext::SALTSIZE] = '\0';
 	setSalt(saltbuff);
   }
-
 }
 
 const char * CryptContext::getSalt() const{
@@ -241,6 +113,7 @@ void CryptContext::init()
   this->initialized = true;
 }
 
+//For decryption on download. Used by cUrl to retrieve salt bytes from header response. Sets salt and initalizes context
 size_t CryptContext::ParseSaltFromHeader(void * data, size_t blockSize, size_t numBlocks, void * userPtr){
   CryptContext * ctx = reinterpret_cast<CryptContext*>(userPtr);
   if(!ctx->initialized){

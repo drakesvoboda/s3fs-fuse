@@ -22,7 +22,7 @@
 #define S3FS_CURL_H_
 
 #include <cassert>
-#include "openssl_enc.h"
+#include "comp_and_crypt.h"
 
 //----------------------------------------------
 // Symbols
@@ -268,7 +268,7 @@ class S3fsCurl
     const unsigned char* postdata;             // use by post method and read callback function.
     int                  postdata_remaining;   // use by post method and read callback function.
     filepart             partdata;             // use by multipart upload/get object callback
-	CryptContext *		 ctx;
+	CompCryptContext *	 ctx;
     bool                 is_use_ahbe;          // additional header by extension
     int                  retry_count;          // retry count for multipart
     FILE*                b_infile;             // backup for retrying

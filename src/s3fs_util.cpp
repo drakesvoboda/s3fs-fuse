@@ -60,6 +60,32 @@ string get_realpath(const char *path) {
   return realpath;
 }
 
+string get_hashedrealpath(const char * path) {
+  char * hashed_path; 
+  unsigned int hashed_len;
+  string realpath;
+
+  if(!strcmp(path, "/") == 0 && !strncmp(path, "/autorun.inf", 12) == 0 && !strncmp(path, "/.Trash", 7)){
+    if(!s3fs_sha256((const unsigned char *)(&path[1]), strlen(path) - 1, (unsigned char **)&hashed_path, &hashed_len)){
+      S3FS_PRN_ERR("Could not hash path");
+    }
+
+    S3FS_PRN_INFO("[path: %s]", path);
+	S3FS_PRN_INFO("[hashed path: %s]", hashed_path);
+	
+	realpath = mount_prefix + "/" + hashed_path;
+
+	free(hashed_path);
+  }else{
+	realpath = mount_prefix + path;
+
+    S3FS_PRN_INFO("[path: %s]", path);
+	S3FS_PRN_INFO("[hashed path: %s]", path);
+  }
+  
+  return realpath;
+}
+
 //-------------------------------------------------------------------
 // Class S3ObjList
 //-------------------------------------------------------------------
