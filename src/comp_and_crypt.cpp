@@ -64,60 +64,75 @@ ssize_t CompCryptUtil::DownloadWriteCallback(void * ptr, size_t size, size_t nme
   return totalwrite;
 }
 
-ssize_t CompCryptUtil::ProcessFile(CompCryptContext * ctx)
+ssize_t CompCryptUtil::DecryptDecompressFile(CompCryptContext * ctx)
 {
-  ssize_t cryptlen;
-  ssize_t readlen, totalread = 0, writelen, totalwrite = 0;
+  return CryptUtil::crypt_file(ctx->cryptctx);
+}
 
-  size_t buffsize = 16 * 1024;
+ssize_t CompCryptUtil::CompressEncryptFile(CompCryptContext * ctx)
+{
+  size_t const inbuffsize = ZSTD_CStreamInSize();
+  void * inbuff = (void *)malloc(inbuffsize);
 
-  unsigned char inbuff[buffsize];
-  unsigned char outbuff[buffsize + EVP_MAX_BLOCK_LENGTH];
+  size_t pressbuffsize = inbuffsize;
+  void * pressbuff = (void *)malloc(pressbuffsize);
 
-  for(;;totalread += readlen, totalwrite += writelen){
-	readlen = pread(ctx->infd, (void *)inbuff, buffsize, totalread);
+  size_t outbuffsize = inbuffsize;
+  void * outbuff = (void *)malloc(outbuffsize);
 
-	if(readlen == 0) break;
-	else if(readlen == -1){
-	  S3FS_PRN_ERR("Error reading from file(%d)", errno); 
-	  return -1;
-	}
-	
-	cryptlen = CryptUtil::do_crypt(ctx->cryptctx, (const void *)inbuff, readlen, (void *)outbuff);
+  if(inbuff == NULL || pressbuff == NULL || outbuff == NULL)
+    S3FS_PRN_ERR("Could not allocate in buffer");
 
-	if (cryptlen == 0) break;
-	else if (cryptlen == -1){
-	  S3FS_PRN_ERR("Error during crypt(%d)", errno); 
-	  return -1;
-	}
+  size_t readlen, toread = inbuffsize, totalread = 0;
+  size_t tocrypt, towrite, writelen;
 
-	writelen = pwrite(ctx->outfd, (const void *)outbuff, cryptlen, totalwrite);
-	
-	if(writelen == -1){
-	  S3FS_PRN_ERR("Error writing to file(%d)", errno); 
-	  return -1;
-	}
-  }
+  for(;;totalread += readlen, ctx->bytes_written += writelen){
+    readlen = pread(ctx->infd, inbuff, toread, totalread);
 
-  if(!ctx->cryptctx->finished){
-    cryptlen = CryptUtil::do_crypt(ctx->cryptctx, inbuff, 0, outbuff); // Finish crypt
-
-    if (cryptlen == -1){
-      S3FS_PRN_ERR("Error during crypt(%d)", errno); 
-	  return -1;
+    if(readlen == 0) break; //We have finished reading the input
+    if(readlen == -1){
+      S3FS_PRN_ERR("Error while reading from file (%d)", errno);
     }
-  
-    writelen = pwrite(ctx->outfd, (const void *)outbuff, cryptlen, totalwrite);
-	
+    
+    tocrypt = CompressUtil::do_compress(ctx->pressctx, inbuff, readlen, &pressbuff, &pressbuffsize, &toread);
+
+    if(tocrypt == -1){
+      S3FS_PRN_ERR("Error while compressing");
+      return -1;
+    }
+
+    if(toread > inbuffsize) toread = inbuffsize;
+
+    if(pressbuffsize > outbuffsize){
+      outbuffsize = pressbuffsize;
+      void * temp = (void *)realloc(outbuff, outbuffsize);
+      if(temp)
+        outbuff = temp;
+      else{
+        S3FS_PRN_ERR("Error while reallocating");
+        return -1;
+      }
+    }
+
+    towrite = CryptUtil::do_crypt(ctx->cryptctx, pressbuff, pressbuffsize, outbuff);
+
+    if(towrite == -1){
+      S3FS_PRN_ERR("Error while encrypting");
+      return -1;
+    }
+
+    writelen = pwrite(ctx->outfd, outbuff, towrite, ctx->bytes_written);
+
     if(writelen == -1){
-	  S3FS_PRN_ERR("Error writing to file(%d)", errno); 
-	  return -1;
+      S3FS_PRN_ERR("Error writing to file");
+      return -1;
     }
-
-    totalwrite += writelen;
   }
+  
 
-  S3FS_PRN_INFO("[returning: %ld]", totalwrite);
+  //TODO: FINISH METHOD
 
-  return totalwrite;
+
+  free(inbuff);
+  free(outbuff);
 }

@@ -38,13 +38,20 @@ public:
   ZSTD_CStream * cstream;
   ZSTD_DStream * dstream;
 
+  int infd, outfd;
+
+  int bytes_written;
+
   bool do_compress;
   bool initialized;
   bool finished;
 
-  CompressContext(bool do_compress) : 
+  CompressContext(int infd, int outfd, bool do_compress) : 
     cstream(NULL), 
     dstream(NULL), 
+    infd(infd),
+    outfd(outfd),
+    bytes_written(0),
     do_compress(do_compress), 
     initialized(false), 
     finished(false) 
@@ -64,8 +71,18 @@ public:
 class CompressUtil {
 friend class CompressContext;
 public:
-  static ssize_t do_compress(CompressContext * ctx, const void * inbuff, size_t buffsize, void * outbuff);
-  static ssize_t do_decompress(CompressContext * ctx, const void * inbuff, size_t buffsize, void * outbuff);
+  // Compresses bytes from inbuff into outbuff. May reallocate outbuff. 
+  // toread is set to recommended number of bytes to input next call
+  static ssize_t do_compress(CompressContext * ctx, 
+        void * inbuff, size_t inbuffsize, void ** outbuff, size_t * outbuffsize, size_t * toread);
+
+  // Decompresses bytes from inbuff into outbuff. May reallocate outbuff. 
+  // toread is set to recommended number of bytes to input next call
+  static ssize_t do_decompress(CompressContext * ctx, 
+        void * inbuff, size_t inbuffsize, void ** outbuff, size_t * outbuffsize, size_t * toread);
+
+  static ssize_t compress_file(CompressContext * ctx);
+  static ssize_t decompress_file(CompressContext * ctx);
 };
 
 #endif

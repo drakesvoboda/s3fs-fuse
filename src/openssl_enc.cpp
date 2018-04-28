@@ -32,14 +32,73 @@ const char * CryptContext::pass = "key";
 const EVP_CIPHER * CryptContext::cipher = EVP_rc4();
 const EVP_MD * CryptContext::digest = EVP_md5();
 
-ssize_t CryptUtil::do_crypt(CryptContext * ctx, const void * inbuff, size_t buffsize, void * outbuff)
+ssize_t CryptUtil::crypt_file(CryptContext * ctx)
 {
+  ssize_t cryptlen;
+  ssize_t readlen, totalread = 0, writelen;
+
+  size_t buffsize = 16 * 1024;
+
+  unsigned char inbuff[buffsize];
+  unsigned char outbuff[buffsize + EVP_MAX_BLOCK_LENGTH];
+
+  for(;;totalread += readlen, ctx->bytes_written += writelen){
+	readlen = pread(ctx->infd, (void *)inbuff, buffsize, totalread);
+
+	if(readlen == 0) break;
+	else if(readlen == -1){
+	  S3FS_PRN_ERR("Error reading from file(%d)", errno); 
+	  return -1;
+	}
+	
+	cryptlen = CryptUtil::do_crypt(ctx, (const void *)inbuff, readlen, (void *)outbuff);
+
+	if (cryptlen == 0) break;
+	else if (cryptlen == -1){
+	  S3FS_PRN_ERR("Error during crypt(%d)", errno); 
+	  return -1;
+	}
+
+	writelen = pwrite(ctx->outfd, (const void *)outbuff, cryptlen, ctx->bytes_written);
+	
+	if(writelen == -1){
+	  S3FS_PRN_ERR("Error writing to file(%d)", errno); 
+	  return -1;
+	}
+  }
+
+  if(!ctx->finished){
+    cryptlen = CryptUtil::do_crypt(ctx, inbuff, 0, outbuff); // Finish crypt
+
+    if (cryptlen == -1){
+      S3FS_PRN_ERR("Error during crypt(%d)", errno); 
+	  return -1;
+    }
+  
+    writelen = pwrite(ctx->outfd, (const void *)outbuff, cryptlen, ctx->bytes_written);
+	
+    if(writelen == -1){
+	  S3FS_PRN_ERR("Error writing to file(%d)", errno); 
+	  return -1;
+    }
+
+    ctx->bytes_written += writelen;
+  }
+
+  S3FS_PRN_INFO("[returning: %ld]", ctx->bytes_written);
+
+  return ctx->bytes_written;
+}
+
+ssize_t CryptUtil::do_crypt(CryptContext * ctx, const void * inputbuff, size_t buffsize, void * outputbuff)
+{
+  unsigned char * inbuff = (unsigned char *)inputbuff;
+  unsigned char * outbuff = (unsigned char *)outputbuff;
+
   if(!ctx->initialized){
     S3FS_PRN_ERR("This encryption context has not been initialized");
 	return -1;
-  }
-
-  if(ctx->finished){
+  }else if(ctx->finished){
     S3FS_PRN_INFO("This encryption context has already finished");
 	return 0;
   }
@@ -47,12 +106,12 @@ ssize_t CryptUtil::do_crypt(CryptContext * ctx, const void * inbuff, size_t buff
   int writelen = 0;
 
   if(buffsize > 0){
-	if(EVP_CipherUpdate(ctx->ctx, (unsigned char *)outbuff, &writelen, (unsigned char *)inbuff, buffsize) == 0){
+	if(EVP_CipherUpdate(ctx->ctx, outbuff, &writelen, inbuff, buffsize) == 0){
       S3FS_PRN_ERR("Error while encrypting/decrypting(%d)", errno);
       return -1;
 	}
   }else if(buffsize == 0){	
-	if(EVP_CipherFinal(ctx->ctx, (unsigned char *)outbuff, &writelen) == 0){
+	if(EVP_CipherFinal(ctx->ctx, outbuff, &writelen) == 0){
       S3FS_PRN_ERR("Error while encrypting/decrypting(%d)", errno);
       return -1;
 	}
@@ -64,8 +123,10 @@ ssize_t CryptUtil::do_crypt(CryptContext * ctx, const void * inbuff, size_t buff
   return writelen;
 }
 
-CryptContext::CryptContext(bool do_encrypt): 
+CryptContext::CryptContext(int infd, int outfd, bool do_encrypt): 
   ctx(EVP_CIPHER_CTX_new()),
+  infd(infd), outfd(outfd),
+  bytes_written(0),
   do_encrypt(do_encrypt),
   initialized(false),
   finished(false),
@@ -113,7 +174,9 @@ void CryptContext::init()
   this->initialized = true;
 }
 
-//For decryption on download. Used by cUrl to retrieve salt bytes from header response. Sets salt and initalizes context
+// For decryption on download. 
+// Used by cUrl to retrieve salt bytes from header response. 
+// Sets salt and initalizes context
 size_t CryptContext::ParseSaltFromHeader(void * data, size_t blockSize, size_t numBlocks, void * userPtr){
   CryptContext * ctx = reinterpret_cast<CryptContext*>(userPtr);
   if(!ctx->initialized){

@@ -2922,7 +2922,7 @@ int S3fsCurl::PutRequest(const char* tpath, headers_t& meta, int fd)
     requestHeaders = curl_slist_sort_insert(requestHeaders, "x-amz-meta-salt", base64_salt);
 	free(base64_salt);
 
-	size_t encrypted_size = CompCryptUtil::ProcessFile(local_ctx);
+	size_t encrypted_size = CompCryptUtil::CompressEncryptFile(local_ctx);
 	delete local_ctx;
 	
 	partdata.fd         = tmpfd;
