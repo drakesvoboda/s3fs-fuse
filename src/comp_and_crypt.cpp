@@ -282,3 +282,37 @@ ssize_t CompCryptUtil::CompressEncryptFile(CompCryptContext * ctx)
     
   return ctx->bytes_written;
 }
+
+ssize_t CompCryptUtil::DecryptDecompressFile(CompCryptContext * ctx)
+{
+  size_t const readbuffsize = ZSTD_CStreamInSize();
+  void * readbuff = (void *)malloc(readbuffsize);
+
+  if(readbuff == NULL){
+    S3FS_PRN_ERR("Could not allocate buffer");
+    return -1;
+  }
+
+  size_t totalread = 0, toread = readbuffsize;
+  ssize_t readlen;
+
+  for(;;){
+    readlen = pread(ctx->infd, readbuff, toread, totalread);
+    totalread += readlen;
+
+    if(readlen == 0) break; //We have finished reading the input
+    if(readlen == -1){
+      S3FS_PRN_ERR("Error while reading from file (%d)", errno);
+    }
+
+    DecryptDecompressWrite(ctx, readbuff, readlen, &toread);
+
+    if(toread > readbuffsize) toread = readbuffsize;
+  }
+
+  DecryptDecompressWriteFinal(ctx);
+
+  free(readbuff);
+    
+  return ctx->bytes_written;
+}

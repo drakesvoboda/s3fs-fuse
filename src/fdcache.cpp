@@ -1495,10 +1495,31 @@ int FdEntity::RowFlush(const char* tpath, bool force_sync)
       S3FS_PRN_ERR("lseek error(%d)", errno);
       return -errno;
     }
+
+    int tmpfd = -1; 
+    char filename[] = "/tmp/s3fs.XXXXXX";
+
+	if((tmpfd = mkstemp(filename)) == -1)
+	{
+      S3FS_PRN_ERR("Could not create temp file(%d)", errno);
+      return -errno;
+	}
+
+	CompCryptContext * local_ctx = new CompCryptContext(fd, -1, tmpfd, true);
+	local_ctx->init();
+
+    char * base64_salt = s3fs_base64((unsigned char *)local_ctx->cryptctx->salt, strlen(local_ctx->cryptctx->salt));
+    orgmeta["x-amz-meta-salt"] = base64_salt;
+	free(base64_salt);
+	
+	// Compress and encrypt
+	CompCryptUtil::CompressEncryptFile(local_ctx);
+	delete local_ctx;
+
     // backup upload file size
     struct stat st;
     memset(&st, 0, sizeof(struct stat));
-    if(-1 == fstat(fd, &st)){
+    if(-1 == fstat(tmpfd, &st)){
       S3FS_PRN_ERR("fstat is failed by errno(%d), but continue...", errno);
     }
 
@@ -1508,14 +1529,15 @@ int FdEntity::RowFlush(const char* tpath, bool force_sync)
       if(120 > S3fsCurl::GetReadwriteTimeout()){
         backup = S3fsCurl::SetReadwriteTimeout(120);
       }
-      result = S3fsCurl::ParallelMultipartUploadRequest(tpath ? tpath : path.c_str(), orgmeta, fd);
+      result = S3fsCurl::ParallelMultipartUploadRequest(tpath ? tpath : path.c_str(), orgmeta, tmpfd);
       if(0 != backup){
         S3fsCurl::SetReadwriteTimeout(backup);
       }
     }else{
       S3fsCurl s3fscurl(true);
-      result = s3fscurl.PutRequest(tpath ? tpath : path.c_str(), orgmeta, fd);
+      result = s3fscurl.PutRequest(tpath ? tpath : path.c_str(), orgmeta, tmpfd);
     }
+
 
     // seek to head of file.
     if(0 == result && 0 != lseek(fd, 0, SEEK_SET)){
@@ -1526,6 +1548,7 @@ int FdEntity::RowFlush(const char* tpath, bool force_sync)
     // reset uploaded file size
     size_orgmeta = static_cast<size_t>(st.st_size);
 
+	close(tmpfd);
   }else{
     // upload rest data
     if(0 < mp_size){

@@ -2882,7 +2882,6 @@ int S3fsCurl::PutRequest(const char* tpath, headers_t& meta, int fd)
 {
   struct stat st;
   int fd2;
-  int tmpfd = -1;
   requestHeaders  = NULL;
 
   S3FS_PRN_INFO3("[tpath=%s]", SAFESTRPTR(tpath));
@@ -2901,33 +2900,15 @@ int S3fsCurl::PutRequest(const char* tpath, headers_t& meta, int fd)
       return -errno;
     }
 
-	char filename[] = "/tmp/s3fs.XXXXXX";
-
-	if((tmpfd = mkstemp(filename)) == -1)
-	{
-      S3FS_PRN_ERR("Could not create temp file(%d)", errno);
-      return -errno;
-	}
-
-    if((b_infile = fdopen(tmpfd, "rb")) == NULL) 
+    if((b_infile = fdopen(fd2, "rb")) == NULL) 
 	{
       S3FS_PRN_ERR("Could not open temp file(%d)", errno);
       return -errno;
 	}
 
-	CompCryptContext * local_ctx = new CompCryptContext(fd2, st.st_size, tmpfd, true);
-	local_ctx->init();
-
-    char * base64_salt = s3fs_base64((unsigned char *)local_ctx->cryptctx->salt, strlen(local_ctx->cryptctx->salt));
-    requestHeaders = curl_slist_sort_insert(requestHeaders, "x-amz-meta-salt", base64_salt);
-	free(base64_salt);
-
-	size_t encrypted_size = CompCryptUtil::CompressEncryptFile(local_ctx);
-	delete local_ctx;
-	
-	partdata.fd         = tmpfd;
+	partdata.fd         = fd2;
     partdata.startpos   = 0;
-	partdata.size       = encrypted_size;
+	partdata.size       = st.st_size;
 	b_partdata_startpos = partdata.startpos;
 	b_partdata_size     = partdata.size;
 
@@ -2939,7 +2920,6 @@ int S3fsCurl::PutRequest(const char* tpath, headers_t& meta, int fd)
   if(!CreateCurlHandle(true)){
     if(b_infile){
 	  fclose(b_infile);
-	  close(tmpfd);
     }
     return -1;
   }
@@ -2956,7 +2936,7 @@ int S3fsCurl::PutRequest(const char* tpath, headers_t& meta, int fd)
   // Make request headers
   string strMD5;
   if(-1 != fd && S3fsCurl::is_content_md5){
-    strMD5         = s3fs_get_content_md5(tmpfd);
+    strMD5         = s3fs_get_content_md5(fd);
     requestHeaders = curl_slist_sort_insert(requestHeaders, "Content-MD5", strMD5.c_str());
   }
 
@@ -3023,7 +3003,6 @@ int S3fsCurl::PutRequest(const char* tpath, headers_t& meta, int fd)
 
   if(b_infile){
     fclose(b_infile);
-	close(tmpfd);
   }
 
   return result;
