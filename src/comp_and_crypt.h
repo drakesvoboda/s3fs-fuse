@@ -36,8 +36,9 @@ public:
 
   void init()
   {
-    pressctx->init();
-    cryptctx->init();
+    if(!cryptctx->initialized){
+      cryptctx->init();
+    }
   }
 
   bool initialized()

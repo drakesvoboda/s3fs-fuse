@@ -28,9 +28,9 @@
 #include "string_util.h"
 
 // Set Statics
-const char * CryptContext::pass = "key";
 const EVP_CIPHER * CryptContext::cipher = EVP_rc4();
 const EVP_MD * CryptContext::digest = EVP_md5();
+std::string CryptContext::pass = "pass";
 
 ssize_t CryptUtil::crypt_file(CryptContext * ctx)
 {
@@ -159,11 +159,17 @@ void CryptContext::setSalt(const char * salt){
   strcpy(this->salt, salt);
 }
 
+std::string CryptContext::SetPassword(const char * pass){
+  std::string old = CryptContext::pass;
+  CryptContext::pass = pass ? pass : "";
+  return old;
+}
+
 void CryptContext::init()
 {
   unsigned char key[16], iv[EVP_MAX_IV_LENGTH];
 
-  if(PKCS5_PBKDF2_HMAC(CryptContext::pass, strlen(CryptContext::pass), (unsigned char *)this->salt, strlen(this->salt), 1, CryptContext::digest, 16, key) == 0)
+  if(PKCS5_PBKDF2_HMAC(CryptContext::pass.c_str(), CryptContext::pass.length(), (unsigned char *)this->salt, strlen(this->salt), 1, CryptContext::digest, 16, key) == 0)
     S3FS_PRN_ERR("Failed to generate key");
 
   if(0 == EVP_CipherInit(this->ctx, CryptContext::cipher, key, iv, this->do_encrypt)){

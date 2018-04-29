@@ -55,7 +55,26 @@ public:
     do_compress(do_compress), 
     initialized(false), 
     finished(false) 
-  { }
+  {
+    if(this->do_compress){
+      cstream = ZSTD_createCStream();
+
+      if(cstream == NULL)
+        S3FS_PRN_ERR("ZSTD_createCStream error");
+
+      size_t const initresult = ZSTD_initCStream(cstream, CompressContext::COMPRESSION_LEVEL);
+
+      if(ZSTD_isError(initresult)) 
+        S3FS_PRN_ERR("ZSTD_initCStream() err: %s", ZSTD_getErrorName(initresult));
+    }else{
+      dstream = ZSTD_createDStream();
+
+      if(dstream == NULL)
+        S3FS_PRN_INFO("ZSTD_createDStream() error");
+    }
+
+    this->initialized = true;
+  }
 
   ~CompressContext()
   {
@@ -64,8 +83,6 @@ public:
     if(dstream != NULL)
       ZSTD_freeDStream(dstream);
   }
-
-  void init();
 };
 
 class CompressUtil {

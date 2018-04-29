@@ -33,6 +33,8 @@
 ssize_t CompressUtil::do_compress(CompressContext * ctx, 
     void * inbuff, size_t inbuffsize, void ** outbuff, size_t * outbuffsize, size_t * toread)
 {
+  S3FS_PRN_INFO("[INBUFFSIZE: %ld]", inbuffsize);
+
   size_t const internalsize = ZSTD_CStreamOutSize();
   void * internalbuff = (void *)malloc(internalsize);
   if(internalbuff == NULL){
@@ -56,10 +58,8 @@ ssize_t CompressUtil::do_compress(CompressContext * ctx,
         return -1;
       }
 
-      totalcopy += output.pos;
-
-      if(totalcopy > *outbuffsize){ // We need to reallocate
-        *outbuffsize += (totalcopy - *outbuffsize) * 2;
+      if(totalcopy + output.pos > *outbuffsize){ // We need to reallocate
+        *outbuffsize += (totalcopy + output.pos - *outbuffsize) * 2;
         temp = realloc(*outbuff, *outbuffsize);
         if(temp)
           *outbuff = temp;
@@ -69,10 +69,11 @@ ssize_t CompressUtil::do_compress(CompressContext * ctx,
         }
       }
 
-      memcpy((char *)*outbuff + totalcopy, &internalbuff, output.pos);
+      memcpy(&((char *)*outbuff)[totalcopy], &internalbuff, output.pos);
+      totalcopy += output.pos;
     }
-  }else{
-    ZSTD_outBuffer output = {outbuff, *outbuffsize, 0};
+  }else if(!ctx->finished){
+    ZSTD_outBuffer output = {internalbuff, internalsize, 0};
 
     size_t const remaining = ZSTD_endStream(ctx->cstream, &output);
     
@@ -81,10 +82,8 @@ ssize_t CompressUtil::do_compress(CompressContext * ctx,
       return -1;
     }
 
-    totalcopy += output.pos;
-
-    if(totalcopy > *outbuffsize){ // We need to reallocate
-      *outbuffsize += (totalcopy - *outbuffsize);
+    if(totalcopy + output.pos > *outbuffsize){ // We need to reallocate
+      *outbuffsize += (totalcopy + output.pos - *outbuffsize);
       temp = realloc(*outbuff, *outbuffsize);
       if(temp)
         *outbuff = temp;
@@ -94,12 +93,15 @@ ssize_t CompressUtil::do_compress(CompressContext * ctx,
       }
     }
 
-    memcpy((char *)*outbuff + totalcopy, &internalbuff, output.pos);
+    memcpy(&((char *)*outbuff)[totalcopy], &internalbuff, output.pos);
+    totalcopy += output.pos;
 
     ctx->finished = true;
   }
 
   free(internalbuff);
+
+  S3FS_PRN_INFO("[TOTALCOPY: %ld]", totalcopy);
 
   return totalcopy;
 }
@@ -107,10 +109,15 @@ ssize_t CompressUtil::do_compress(CompressContext * ctx,
 ssize_t CompressUtil::do_decompress(CompressContext * ctx, 
     void * inbuff, size_t inbuffsize, void ** outbuff, size_t * outbuffsize, size_t * toread)
 {
-  size_t const internalsize = ZSTD_CStreamOutSize();
+  size_t const internalsize = ZSTD_DStreamOutSize();
   void * internalbuff = (void *)malloc(internalsize);
   if(internalbuff == NULL){
     S3FS_PRN_ERR("Could not allocate out buffer");
+    return -1;
+  }
+
+  if(ctx->dstream == NULL){
+    S3FS_PRN_ERR("Dstream has not been initialized");
     return -1;
   }
 
@@ -130,10 +137,9 @@ ssize_t CompressUtil::do_decompress(CompressContext * ctx,
         return -1;
       }
 
-      totalcopy += output.pos;
-
-      if(totalcopy > *outbuffsize){ // We need to reallocate
-        *outbuffsize += (totalcopy - *outbuffsize) * 2;
+      if(totalcopy + output.pos > *outbuffsize){ // We need to reallocate
+        S3FS_PRN_INFO("Reallocating");
+        *outbuffsize += (totalcopy + output.pos - *outbuffsize) * 2;
         temp = realloc(*outbuff, (int)(*outbuffsize));
         if(temp)
           *outbuff = temp;
@@ -143,13 +149,19 @@ ssize_t CompressUtil::do_decompress(CompressContext * ctx,
         }
       }
 
-      memcpy((char *)*outbuff + totalcopy, &internalbuff, output.pos);
+      S3FS_PRN_INFO("[Buffsize: %ld][Offset: %ld][NumBytes: %ld]", *outbuffsize, totalcopy, output.pos);
+
+      memcpy(&((char *)*outbuff)[totalcopy], &internalbuff, output.pos);
+
+      totalcopy += output.pos;
     }
   }else{
     ctx->finished = true;
   }
 
   free(internalbuff);
+
+  S3FS_PRN_INFO("[Returning: %ld]", totalcopy);
 
   return totalcopy;
 }
@@ -256,24 +268,4 @@ ssize_t CompressUtil::decompress_file(CompressContext * ctx)
   free(outbuff);
 
   return ctx->bytes_written;
-}
-
-void CompressContext::init()
-{
-  if(this->do_compress){
-    cstream = ZSTD_createCStream();
-    if(cstream == NULL)
-      S3FS_PRN_ERR("ZSTD_createCStream error");
-
-    size_t const initresult = ZSTD_initCStream(cstream, CompressContext::COMPRESSION_LEVEL);
-
-    if(ZSTD_isError(initresult)) 
-      S3FS_PRN_ERR("ZSTD_initCStream() err: %s", ZSTD_getErrorName(initresult));
-  }else{
-    ZSTD_DStream* const dstream = ZSTD_createDStream();
-    if(dstream == NULL)
-      S3FS_PRN_INFO("ZSTD_createDStream() error");
-  }
-
-  this->initialized = true;
 }

@@ -8,7 +8,7 @@ class CryptContext {
 friend class CryptUtil;
 private: 
   const static size_t SALTSIZE = 8;
-  const static char * pass;
+  static std::string pass;
   const static EVP_CIPHER * cipher;
   const static EVP_MD * digest;
 public:
@@ -38,11 +38,14 @@ public:
   void setSalt(const char * salt);
   const char * getSalt() const;
 
+
   void init(); // Initializes the context with key and salt. 
 			   // Must be executed before any bytes are encrypted by the context
 
   // Used by cUrl. Retrieves salt from header response. Initializes this context
   static size_t ParseSaltFromHeader(void * data, size_t blockSize, size_t numBlocks, void * userPtr);
+
+  static std::string SetPassword(const char * pass);
 };
 
 
