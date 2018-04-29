@@ -27,8 +27,6 @@
 #include <syslog.h>
 #include <sys/types.h>
 
-#include <vector>
-#include <algorithm>
 #include <string>
 
 static const std::string SPACES = " \t\r\n";
@@ -56,6 +54,7 @@ bool get_keyword_value(std::string& target, const char* keyword, std::string& va
 std::string s3fs_hex(const unsigned char* input, size_t length);
 char* s3fs_base64(const unsigned char* input, size_t length);
 unsigned char* s3fs_decode64(const char* input, size_t* plength);
+
 #endif // S3FS_STRING_UTIL_H_
 
 /*
