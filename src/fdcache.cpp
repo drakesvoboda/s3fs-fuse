@@ -1538,7 +1538,6 @@ int FdEntity::RowFlush(const char* tpath, bool force_sync)
       result = s3fscurl.PutRequest(tpath ? tpath : path.c_str(), orgmeta, tmpfd);
     }
 
-
     // seek to head of file.
     if(0 == result && 0 != lseek(fd, 0, SEEK_SET)){
       S3FS_PRN_ERR("lseek error(%d)", errno);

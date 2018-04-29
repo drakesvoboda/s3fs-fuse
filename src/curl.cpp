@@ -646,7 +646,7 @@ string S3fsCurl::LookupMimeType(const string& name)
   string::size_type first_pos = name.find_first_of('.');
   string prefix, ext, ext2;
 
-  // No dots in n/S3/ame, just return
+  // No dots in name, just return
   if(last_pos == string::npos){
     return result;
   }
@@ -1674,7 +1674,6 @@ S3fsCurl::~S3fsCurl()
 {
   DestroyCurlHandle();
   DestroyEncCtx();
-  
 }
 
 bool S3fsCurl::ResetHandle(void)
@@ -1804,7 +1803,7 @@ bool S3fsCurl::ClearInternalData(void)
   }
   responseHeaders.clear();
   if(bodydata){
-    delete bodydata; 
+    delete bodydata;
     bodydata = NULL;
   }
   if(headdata){
@@ -2386,7 +2385,7 @@ void S3fsCurl::insertV4Headers()
   string payload_hash;
   switch (type) {
     case REQTYPE_PUT:
-      payload_hash = s3fs_sha256sum((b_infile != NULL) ? fileno(b_infile) : -1, 0, -1);
+      payload_hash = s3fs_sha256sum((b_infile == NULL) ? -1 : fileno(b_infile), 0, -1);
       break;
 
     case REQTYPE_COMPLETEMULTIPOST:
@@ -2582,7 +2581,7 @@ int S3fsCurl::GetIAMCredentials(void)
     S3FS_PRN_ERR("Something error occurred, could not get IAM credential.");
     result = -EIO;
   }
-  delete bodydata; 
+  delete bodydata;
   bodydata = NULL;
 
   return result;
@@ -2620,7 +2619,7 @@ bool S3fsCurl::LoadIAMRoleFromMetaData(void)
     S3FS_PRN_ERR("Something error occurred, could not get IAM role name.");
     result = -EIO;
   }
-  delete bodydata; 
+  delete bodydata;
   bodydata = NULL;
 
   return (0 == result);
@@ -2881,55 +2880,42 @@ int S3fsCurl::PutHeadRequest(const char* tpath, headers_t& meta, bool is_copy)
 int S3fsCurl::PutRequest(const char* tpath, headers_t& meta, int fd)
 {
   struct stat st;
-  int fd2;
-  requestHeaders  = NULL;
+  FILE*       file = NULL;
 
   S3FS_PRN_INFO3("[tpath=%s]", SAFESTRPTR(tpath));
 
   if(!tpath){
     return -1;
   }
-
   if(-1 != fd){
     // duplicate fd
-    if(-1 == (fd2 = dup(fd)) || -1 == fstat(fd2, &st) || 0 != lseek(fd2, 0, SEEK_SET)){
+    int fd2;
+    if(-1 == (fd2 = dup(fd)) || -1 == fstat(fd2, &st) || 0 != lseek(fd2, 0, SEEK_SET) || NULL == (file = fdopen(fd2, "rb"))){
       S3FS_PRN_ERR("Could not duplicate file descriptor(errno=%d)", errno);
       if(-1 != fd2){
         close(fd2);
       }
       return -errno;
     }
-
-    if((b_infile = fdopen(fd2, "rb")) == NULL) 
-	{
-      S3FS_PRN_ERR("Could not open temp file(%d)", errno);
-      return -errno;
-	}
-
-	partdata.fd         = fd2;
-    partdata.startpos   = 0;
-	partdata.size       = st.st_size;
-	b_partdata_startpos = partdata.startpos;
-	b_partdata_size     = partdata.size;
-
+    b_infile = file;
   }else{
     // This case is creating zero byte object.(calling by create_file_object())
     S3FS_PRN_INFO3("create zero byte file object.");
   }
 
   if(!CreateCurlHandle(true)){
-    if(b_infile){
-	  fclose(b_infile);
+    if(file){
+      fclose(file);
     }
     return -1;
   }
-
   string resource;
   string turl;
   MakeUrlResource(get_realpath(tpath).c_str(), resource, turl);
 
   url             = prepare_url(turl.c_str());
   path            = get_realpath(tpath);
+  requestHeaders  = NULL;
   responseHeaders.clear();
   bodydata        = new BodyData();
 
@@ -2986,10 +2972,9 @@ int S3fsCurl::PutRequest(const char* tpath, headers_t& meta, int fd)
   curl_easy_setopt(hCurl, CURLOPT_WRITEDATA, (void*)bodydata);
   curl_easy_setopt(hCurl, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
   curl_easy_setopt(hCurl, CURLOPT_HTTPHEADER, requestHeaders);
-  if(b_infile){
-    curl_easy_setopt(hCurl, CURLOPT_INFILESIZE_LARGE, partdata.size); // Content-Length
-    curl_easy_setopt(hCurl, CURLOPT_READFUNCTION, S3fsCurl::UploadReadCallback);
-    curl_easy_setopt(hCurl, CURLOPT_READDATA, (void*)this);
+  if(file){
+    curl_easy_setopt(hCurl, CURLOPT_INFILESIZE_LARGE, static_cast<curl_off_t>(st.st_size)); // Content-Length
+    curl_easy_setopt(hCurl, CURLOPT_INFILE, file);
   }else{
     curl_easy_setopt(hCurl, CURLOPT_INFILESIZE, 0);             // Content-Length: 0
   }
@@ -3000,9 +2985,8 @@ int S3fsCurl::PutRequest(const char* tpath, headers_t& meta, int fd)
   int result = RequestPerform();
   delete bodydata;
   bodydata = NULL;
-
-  if(b_infile){
-    fclose(b_infile);
+  if(file){
+    fclose(file);
   }
 
   return result;
@@ -3272,19 +3256,19 @@ int S3fsCurl::PreMultipartPostRequest(const char* tpath, headers_t& meta, string
   // request
   int result;
   if(0 != (result = RequestPerform())){
-    delete bodydata; 
+    delete bodydata;
     bodydata = NULL;
     return result;
   }
 
   // Parse XML body for UploadId
   if(!S3fsCurl::GetUploadId(upload_id)){
-    delete bodydata; 
+    delete bodydata;
     bodydata = NULL;
     return -1;
   }
 
-  delete bodydata; 
+  delete bodydata;
   bodydata = NULL;
   return 0;
 }
@@ -3354,7 +3338,7 @@ int S3fsCurl::CompleteMultipartPostRequest(const char* tpath, string& upload_id,
 
   // request
   int result = RequestPerform();
-  delete bodydata; 
+  delete bodydata;
   bodydata = NULL;
   postdata = NULL;
 
@@ -3398,7 +3382,7 @@ int S3fsCurl::MultipartListRequest(string& body)
   }else{
     body = "";
   }
-  delete bodydata; 
+  delete bodydata;
   bodydata = NULL;
 
   return result;
@@ -3541,7 +3525,7 @@ int S3fsCurl::UploadMultipartPostRequest(const char* tpath, int part_num, const 
   }
 
   // closing
-  delete bodydata; 
+  delete bodydata;
   bodydata = NULL;
   delete headdata;
   headdata = NULL;
@@ -3636,7 +3620,7 @@ int S3fsCurl::CopyMultipartPostRequest(const char* from, const char* to, int par
     S3FS_XMLFREEDOC(doc);
   }
 
-  delete bodydata; 
+  delete bodydata;
   bodydata = NULL;
   delete headdata;
   headdata = NULL;

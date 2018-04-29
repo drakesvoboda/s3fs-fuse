@@ -2513,7 +2513,6 @@ static int list_bucket(const char* path, S3ObjList& head, const char* delimiter,
       return result;
     }
     body = s3fscurl.GetBodyData();
-	S3FS_PRN_INFO("[List Bucket: %s]", body->print());
 
     // xmlDocPtr
     if(NULL == (doc = xmlReadMemory(body->str(), static_cast<int>(body->size()), "", NULL, 0))){
@@ -4362,7 +4361,6 @@ static int my_fuse_opt_proc(void* data, const char* arg, int key, struct fuse_ar
       is_mp_umask = true;
       return 0;
     }
-    
     if(0 == STR2NCMP(arg, "default_acl=")){
       const char* acl = strchr(arg, '=') + sizeof(char);
       S3fsCurl::SetDefaultAcl(acl);
