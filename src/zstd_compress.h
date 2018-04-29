@@ -1,8 +1,6 @@
 #ifndef COMPRESSUTIL_H 
 #define COMPRESSUTIL_H
 
-#include <openssl/evp.h>
-#include <openssl/rand.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/stat.h>
@@ -31,16 +29,11 @@
 #include "string_util.h"
 
 class CompressContext {
-friend class CompressUtil;
 private:
   const static int COMPRESSION_LEVEL = 1;
 public:
   ZSTD_CStream * cstream;
   ZSTD_DStream * dstream;
-
-  int infd, outfd;
-
-  int bytes_written;
 
   bool do_compress;
   bool initialized;
@@ -49,9 +42,6 @@ public:
   CompressContext(int infd, int outfd, bool do_compress) : 
     cstream(NULL), 
     dstream(NULL), 
-    infd(infd),
-    outfd(outfd),
-    bytes_written(0),
     do_compress(do_compress), 
     initialized(false), 
     finished(false) 
