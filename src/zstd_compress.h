@@ -93,6 +93,8 @@ public:
   static ssize_t do_compress(CompressContext * ctx, 
         void * inbuff, size_t inbuffsize, void ** outbuff, size_t * outbuffsize, size_t * toread);
 
+  static ssize_t do_compress_final(CompressContext * ctx, void ** outbuff, size_t * outbuffsize);
+
   // Decompresses bytes from inbuff into outbuff. May reallocate outbuff. 
   // toread is set to recommended number of bytes to input next call
   static ssize_t do_decompress(CompressContext * ctx, 

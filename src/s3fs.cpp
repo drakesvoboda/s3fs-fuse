@@ -4313,6 +4313,12 @@ static int my_fuse_opt_proc(void* data, const char* arg, int key, struct fuse_ar
       return 1;
     }
 
+    if(0 == STR2NCMP(arg, "encryption_password=")){
+      const char* acl = strchr(arg, '=') + sizeof(char);
+      CryptContext::SetPassword(acl);
+      return 0;
+    }
+
     // Unknown option
     if(0 == utility_mode){
       S3FS_PRN_EXIT("specified unknown third optioni(%s).", arg);
@@ -4356,12 +4362,7 @@ static int my_fuse_opt_proc(void* data, const char* arg, int key, struct fuse_ar
       is_mp_umask = true;
       return 0;
     }
-    if(0 == STR2NCMP(arg, "encryption_password=")){
-      const char* acl = strchr(arg, '=') + sizeof(char);
-	  S3FS_PRN_INFO("[password: %s]", acl);
-      CryptContext::SetPassword(acl);
-      return 0;
-    }
+    
     if(0 == STR2NCMP(arg, "default_acl=")){
       const char* acl = strchr(arg, '=') + sizeof(char);
       S3fsCurl::SetDefaultAcl(acl);

@@ -35,55 +35,39 @@ ssize_t CompressUtil::do_compress(CompressContext * ctx,
 {
   S3FS_PRN_INFO("[INBUFFSIZE: %ld]", inbuffsize);
 
+  if(ctx->finished){
+    S3FS_PRN_ERR("This context has already finished");
+    return -1;
+  }else if(ctx->cstream == NULL){
+    S3FS_PRN_ERR("cstream has not been initialized");
+    return -1;
+  }
+  else if(inbuff == NULL || inbuffsize == 0)
+    return 0;
+
   size_t const internalsize = ZSTD_CStreamOutSize();
   void * internalbuff = (void *)malloc(internalsize);
   if(internalbuff == NULL){
-    S3FS_PRN_ERR("Could notallocate out buffer");
+    S3FS_PRN_ERR("Could not allocate out buffer");
     return -1;
   }
 
-  void * temp;
-
   size_t totalcopy = 0;
 
-  if(inbuffsize > 0 && inbuff != NULL){
-    ZSTD_inBuffer input = {inbuff, inbuffsize, 0};
-    for(;input.pos < input.size;){
-      ZSTD_outBuffer output = {internalbuff, internalsize, 0};
-
-      *toread = ZSTD_compressStream(ctx->cstream, &output, &input);
-
-      if(ZSTD_isError(*toread)){
-        S3FS_PRN_ERR("ZSTD_compressStream() err: %s", ZSTD_getErrorName(*toread));
-        return -1;
-      }
-
-      if(totalcopy + output.pos > *outbuffsize){ // We need to reallocate
-        *outbuffsize += (totalcopy + output.pos - *outbuffsize) * 2;
-        temp = realloc(*outbuff, *outbuffsize);
-        if(temp)
-          *outbuff = temp;
-        else{
-          S3FS_PRN_ERR("Error reallocating");
-          return -1;
-        }
-      }
-
-      memcpy(&((char *)*outbuff)[totalcopy], &internalbuff, output.pos);
-      totalcopy += output.pos;
-    }
-  }else if(!ctx->finished){
+  ZSTD_inBuffer input = {inbuff, inbuffsize, 0};
+  for(;input.pos < input.size;){
     ZSTD_outBuffer output = {internalbuff, internalsize, 0};
 
-    size_t const remaining = ZSTD_endStream(ctx->cstream, &output);
-    
-    if(remaining){
-      S3FS_PRN_ERR("Not fully flushed")
+    *toread = ZSTD_compressStream(ctx->cstream, &output, &input);
+
+    if(ZSTD_isError(*toread)){
+      S3FS_PRN_ERR("ZSTD_compressStream() err: %s", ZSTD_getErrorName(*toread));
       return -1;
     }
 
     if(totalcopy + output.pos > *outbuffsize){ // We need to reallocate
-      *outbuffsize += (totalcopy + output.pos - *outbuffsize);
+      *outbuffsize += (totalcopy + output.pos - *outbuffsize) * 2;
+      void * temp;
       temp = realloc(*outbuff, *outbuffsize);
       if(temp)
         *outbuff = temp;
@@ -95,14 +79,62 @@ ssize_t CompressUtil::do_compress(CompressContext * ctx,
 
     memcpy(&((char *)*outbuff)[totalcopy], &internalbuff, output.pos);
     totalcopy += output.pos;
-
-    ctx->finished = true;
   }
-
+ 
   free(internalbuff);
 
   S3FS_PRN_INFO("[TOTALCOPY: %ld]", totalcopy);
 
+  return totalcopy;
+}
+
+ssize_t CompressUtil::do_compress_final(CompressContext * ctx, void ** outbuff, size_t * outbuffsize)
+{
+  if(ctx->finished){
+    S3FS_PRN_ERR("This context has already finished");
+    return -1;
+  }else if(ctx->cstream == NULL){
+    S3FS_PRN_ERR("cstream has not been initialized");
+    return -1;
+  }
+  
+  size_t const internalsize = ZSTD_CStreamOutSize();
+  void * internalbuff = (void *)malloc(internalsize);
+  if(internalbuff == NULL){
+    S3FS_PRN_ERR("Could notallocate out buffer");
+    return -1;
+  }
+
+  ZSTD_outBuffer output = {internalbuff, internalsize, 0};
+  size_t const remaining = ZSTD_endStream(ctx->cstream, &output);
+  
+  ssize_t totalcopy = output.pos;
+
+  if(remaining){
+    S3FS_PRN_ERR("Not fully flushed")
+    return -1;
+  }
+
+  if((size_t)totalcopy > *outbuffsize){ // We need to reallocate
+    *outbuffsize += (totalcopy - *outbuffsize);
+    void * temp;
+    temp = realloc(*outbuff, *outbuffsize);
+    if(temp)
+      *outbuff = temp;
+    else{
+      S3FS_PRN_ERR("Error reallocating");
+      return -1;
+    }
+  }
+
+
+  S3FS_PRN_INFO("[TOTALCOPY: %ld]", totalcopy);
+
+  memcpy(outbuff, &internalbuff, totalcopy);
+
+  ctx->finished = true;
+  free(internalbuff);
+  
   return totalcopy;
 }
 
@@ -121,46 +153,40 @@ ssize_t CompressUtil::do_decompress(CompressContext * ctx,
     return -1;
   }
 
-  void * temp;
-
   size_t totalcopy = 0;
 
-  if(inbuffsize > 0 && inbuff != NULL){
-    ZSTD_inBuffer input = {inbuff, inbuffsize, 0};
-    for(;input.pos < input.size;){
-      ZSTD_outBuffer output = {internalbuff, internalsize, 0};
+  ZSTD_inBuffer input = {inbuff, inbuffsize, 0};
+  for(;input.pos < input.size;){
+    ZSTD_outBuffer output = {internalbuff, internalsize, 0};
 
-      *toread = ZSTD_decompressStream(ctx->dstream, &output, &input);
+    *toread = ZSTD_decompressStream(ctx->dstream, &output, &input);
 
-      if(ZSTD_isError(*toread)){
-        S3FS_PRN_ERR("ZSTD_compressStream() err: %s", ZSTD_getErrorName(*toread));
+    if(ZSTD_isError(*toread)){
+      S3FS_PRN_ERR("ZSTD_compressStream() err: %s", ZSTD_getErrorName(*toread));
+      return -1;
+    }
+
+    if(totalcopy + output.pos > *outbuffsize){ // We need to reallocate
+      S3FS_PRN_INFO("Reallocating");
+      *outbuffsize += (totalcopy + output.pos - *outbuffsize) * 2;
+      void * temp;
+      temp = realloc(*outbuff, (int)(*outbuffsize));
+      if(temp)
+        *outbuff = temp;
+      else{
+        S3FS_PRN_ERR("Error reallocating");
         return -1;
       }
-
-      if(totalcopy + output.pos > *outbuffsize){ // We need to reallocate
-        S3FS_PRN_INFO("Reallocating");
-        *outbuffsize += (totalcopy + output.pos - *outbuffsize) * 2;
-        temp = realloc(*outbuff, (int)(*outbuffsize));
-        if(temp)
-          *outbuff = temp;
-        else{
-          S3FS_PRN_ERR("Error reallocating");
-          return -1;
-        }
-      }
-
-      S3FS_PRN_INFO("[Buffsize: %ld][Offset: %ld][NumBytes: %ld]", *outbuffsize, totalcopy, output.pos);
-
-      memcpy(&((char *)*outbuff)[totalcopy], &internalbuff, output.pos);
-
-      totalcopy += output.pos;
     }
-  }else{
-    ctx->finished = true;
+
+    S3FS_PRN_INFO("[Buffsize: %ld][Offset: %ld][NumBytes: %ld]", *outbuffsize, totalcopy, output.pos);
+
+    memcpy(&((char *)*outbuff)[totalcopy], &internalbuff, output.pos);
+
+    totalcopy += output.pos;
   }
 
   free(internalbuff);
-
   S3FS_PRN_INFO("[Returning: %ld]", totalcopy);
 
   return totalcopy;

@@ -60,7 +60,12 @@ public:
   static ssize_t DownloadWriteCallback(void * ptr, size_t size, size_t nmemb, void * userp);
 
   static ssize_t CompressEncryptFile(CompCryptContext * ctx);
-  static ssize_t DecryptDecompressFile(CompCryptContext * ctx);
+
+  static ssize_t CompressEncryptWrite(CompCryptContext * ctx, void * inbuff, size_t numbytes, size_t * toread);
+  static ssize_t CompressEncryptWriteFinal(CompCryptContext * ctx);
+  static ssize_t DecryptDecompressWrite(CompCryptContext * ctx, void * inbuff, size_t numbytes, size_t * toread);
+
+  static ssize_t DecryptDecompressWriteFinal(CompCryptContext * ctx);
 };
 
 #endif
