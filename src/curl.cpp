@@ -2385,7 +2385,7 @@ void S3fsCurl::insertV4Headers()
   string payload_hash;
   switch (type) {
     case REQTYPE_PUT:
-      payload_hash = s3fs_sha256sum((b_infile == NULL) ? -1 : fileno(b_infile), 0, -1);
+      payload_hash = s3fs_sha256sum(b_infile == NULL ? -1 : fileno(b_infile), 0, -1);
       break;
 
     case REQTYPE_COMPLETEMULTIPOST:
